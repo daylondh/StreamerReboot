@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
@@ -178,8 +179,16 @@ class FfmpegStreamEngine extends ChangeNotifier
     await previous.stopImageStream();
     _camera = next;
     try {
+      var describedFormat = false;
       await next.startImageStream((frame) {
-        if (frame.width != _frameWidth || frame.height != _frameHeight) return;
+        if (!describedFormat) {
+          describedFormat = true;
+          debugPrint(
+            '[FFmpeg] Switched camera frame ${frame.width}x${frame.height} '
+            '(${_cameraPixelFormat(frame)}); normalizing to '
+            '${_frameWidth}x$_frameHeight ($_pixelFormat)',
+          );
+        }
         _writeVideoFrame(frame);
       });
     } catch (_) {
@@ -202,8 +211,10 @@ class FfmpegStreamEngine extends ChangeNotifier
     _addEvent(RecordingLifecycleStage.stopping, session.shutdownText);
     try {
       _addEvent(RecordingLifecycleStage.finalizing, 'FFmpeg outputs');
-      process.stdin.writeln('q');
-      await process.stdin.flush();
+      // End both inputs normally. FFmpeg treats EOF as a graceful end-of-file
+      // and flushes encoder buffers plus the FLV/MP4 trailers. Its interactive
+      // `q` command instead interrupts active muxer writes on some builds.
+      await _closeInputFeeds();
       int exitCode;
       try {
         exitCode = await process.exitCode.timeout(const Duration(seconds: 20));
@@ -221,7 +232,7 @@ class FfmpegStreamEngine extends ChangeNotifier
       }
       _addEvent(RecordingLifecycleStage.stopped, 'Stream finalized');
     } finally {
-      await _tearDownMedia(killProcess: true);
+      await _tearDownMedia(killProcess: false);
       _stopping = false;
     }
   }
@@ -299,27 +310,77 @@ class FfmpegStreamEngine extends ChangeNotifier
   void _writeVideoFrame(CameraImage frame) {
     final socket = _videoSocket;
     if (socket == null || frame.planes.isEmpty) return;
-    if (frame.width != _frameWidth || frame.height != _frameHeight) return;
+    final targetWidth = _frameWidth;
+    final targetHeight = _frameHeight;
+    final targetFormat = _pixelFormat;
+    if (targetWidth == null || targetHeight == null || targetFormat == null) {
+      return;
+    }
     final plane = frame.planes.first;
     final rowBytes = frame.width * 4;
     try {
-      if (plane.bytesPerRow == rowBytes) {
+      final sourceFormat = _cameraPixelFormat(frame);
+      if (frame.width == targetWidth &&
+          frame.height == targetHeight &&
+          sourceFormat == targetFormat &&
+          plane.bytesPerRow == rowBytes) {
         socket.add(plane.bytes);
         return;
       }
-      final packed = Uint8List(rowBytes * frame.height);
-      for (var row = 0; row < frame.height; row++) {
-        packed.setRange(
-          row * rowBytes,
-          (row + 1) * rowBytes,
-          plane.bytes,
-          row * plane.bytesPerRow,
-        );
-      }
-      socket.add(packed);
+      socket.add(
+        _normalizeFrame(
+          frame,
+          sourceFormat: sourceFormat,
+          targetWidth: targetWidth,
+          targetHeight: targetHeight,
+          targetFormat: targetFormat,
+        ),
+      );
     } catch (error) {
       _recordTransportError('video', error);
     }
+  }
+
+  Uint8List _normalizeFrame(
+    CameraImage frame, {
+    required String sourceFormat,
+    required int targetWidth,
+    required int targetHeight,
+    required String targetFormat,
+  }) {
+    final source = frame.planes.first;
+    final output = Uint8List(targetWidth * targetHeight * 4);
+    final scale = math.min(
+      targetWidth / frame.width,
+      targetHeight / frame.height,
+    );
+    final scaledWidth = (frame.width * scale).round();
+    final scaledHeight = (frame.height * scale).round();
+    final left = (targetWidth - scaledWidth) ~/ 2;
+    final top = (targetHeight - scaledHeight) ~/ 2;
+    final swapRedBlue = sourceFormat != targetFormat;
+
+    for (var y = 0; y < scaledHeight; y++) {
+      final sourceY = y * frame.height ~/ scaledHeight;
+      final sourceRow = sourceY * source.bytesPerRow;
+      final targetRow = (top + y) * targetWidth * 4;
+      for (var x = 0; x < scaledWidth; x++) {
+        final sourceX = x * frame.width ~/ scaledWidth;
+        final sourceOffset = sourceRow + sourceX * 4;
+        final targetOffset = targetRow + (left + x) * 4;
+        if (swapRedBlue) {
+          output[targetOffset] = source.bytes[sourceOffset + 2];
+          output[targetOffset + 1] = source.bytes[sourceOffset + 1];
+          output[targetOffset + 2] = source.bytes[sourceOffset];
+        } else {
+          output[targetOffset] = source.bytes[sourceOffset];
+          output[targetOffset + 1] = source.bytes[sourceOffset + 1];
+          output[targetOffset + 2] = source.bytes[sourceOffset + 2];
+        }
+        output[targetOffset + 3] = source.bytes[sourceOffset + 3];
+      }
+    }
+    return output;
   }
 
   void _startAudioMixer() {
@@ -379,6 +440,7 @@ class FfmpegStreamEngine extends ChangeNotifier
   }
 
   void _recordTransportError(String channel, Object error) {
+    if (_stopping) return;
     _transportError ??= error;
     final message = _sanitizeDiagnostic('$channel transport: $error');
     _transportDiagnostics.add(message);
@@ -389,6 +451,20 @@ class FfmpegStreamEngine extends ChangeNotifier
   }
 
   Future<void> _tearDownMedia({required bool killProcess}) async {
+    if (killProcess) _process?.kill();
+    await _closeInputFeeds();
+    await _ignoreCleanup(_stderrSubscription?.cancel(), 'FFmpeg diagnostics');
+    _stderrSubscription = null;
+    _process = null;
+    _frameWidth = null;
+    _frameHeight = null;
+    _pixelFormat = null;
+    _outputPath = null;
+    _sensitiveIngestionUrl = null;
+    _transportError = null;
+  }
+
+  Future<void> _closeInputFeeds() async {
     _audioTimer?.cancel();
     _audioTimer = null;
     for (final subscription in _audioSubscriptions) {
@@ -401,7 +477,6 @@ class FfmpegStreamEngine extends ChangeNotifier
     if (camera?.value.isStreamingImages ?? false) {
       await _ignoreCleanup(camera!.stopImageStream(), 'camera image stream');
     }
-    if (killProcess) _process?.kill();
     await _ignoreCleanup(_videoSocket?.close(), 'video socket');
     await _ignoreCleanup(_audioSocket?.close(), 'audio socket');
     await _ignoreCleanup(_videoServer?.close(), 'video server');
@@ -410,15 +485,6 @@ class FfmpegStreamEngine extends ChangeNotifier
     _audioSocket = null;
     _videoServer = null;
     _audioServer = null;
-    await _ignoreCleanup(_stderrSubscription?.cancel(), 'FFmpeg diagnostics');
-    _stderrSubscription = null;
-    _process = null;
-    _frameWidth = null;
-    _frameHeight = null;
-    _pixelFormat = null;
-    _outputPath = null;
-    _sensitiveIngestionUrl = null;
-    _transportError = null;
   }
 
   Future<void> _ignoreCleanup(Future<void>? operation, String resource) async {
@@ -474,6 +540,10 @@ class FfmpegStreamEngine extends ChangeNotifier
   }
 
   String _ffmpegPixelFormat(CameraImage frame) {
+    return _cameraPixelFormat(frame);
+  }
+
+  String _cameraPixelFormat(CameraImage frame) {
     final raw = frame.format.raw.toString().toLowerCase();
     if (raw.contains('rgba')) return 'rgba';
     if (raw.contains('bgra')) return 'bgra';

@@ -117,9 +117,13 @@ void main() {
 
   test('creates and binds a broadcast and RTMP stream', () async {
     final requests = <http.Request>[];
+    var broadcastWentLive = false;
     final client = MockClient((request) async {
       requests.add(request);
       if (request.url.path.endsWith('/liveBroadcasts/transition')) {
+        if (request.url.queryParameters['broadcastStatus'] == 'live') {
+          broadcastWentLive = true;
+        }
         return _jsonResponse(
           jsonEncode({
             'id': 'broadcast-1',
@@ -132,14 +136,30 @@ void main() {
       if (request.url.path.endsWith('/liveBroadcasts/bind')) {
         return _jsonResponse('{"id":"broadcast-1"}');
       }
+      if (request.method == 'GET' &&
+          request.url.path.endsWith('/liveBroadcasts')) {
+        return _jsonResponse(
+          '{"items":[{"id":"broadcast-1",'
+          '"status":{"lifeCycleStatus":"ready"}}]}',
+        );
+      }
       if (request.url.path.endsWith('/liveBroadcasts')) {
         return _jsonResponse('{"id":"broadcast-1"}');
       }
       if (request.method == 'GET' &&
           request.url.path.endsWith('/liveStreams')) {
         return _jsonResponse(
-          '{"items":[{"id":"stream-1","status":{"streamStatus":"active",'
-          '"healthStatus":{"status":"good"}}}]}',
+          jsonEncode({
+            'items': [
+              {
+                'id': 'stream-1',
+                'status': {
+                  'streamStatus': broadcastWentLive ? 'inactive' : 'active',
+                  'healthStatus': {'status': 'good'},
+                },
+              },
+            ],
+          }),
         );
       }
       if (request.url.path.endsWith('/liveStreams')) {
@@ -171,23 +191,24 @@ void main() {
 
     expect(target.broadcastId, 'broadcast-1');
     expect(target.streamId, 'stream-1');
-    expect(
-      target.ingestionUrl,
-      'rtmps://a.rtmps.youtube.com:443/live2/secret-key',
-    );
+    expect(target.ingestionUrl, 'rtmp://a.rtmp.youtube.com/live2/secret-key');
     expect(
       target.fallbackIngestionUrl,
-      'rtmp://a.rtmp.youtube.com/live2/secret-key',
+      'rtmps://a.rtmps.youtube.com:443/live2/secret-key',
     );
     expect(service.useFallbackIngestion(), isTrue);
     expect(
       service.target?.ingestionUrl,
-      'rtmp://a.rtmp.youtube.com/live2/secret-key',
+      'rtmps://a.rtmps.youtube.com:443/live2/secret-key',
     );
     expect(requests, hasLength(3));
     final broadcastBody = jsonDecode(requests.first.body);
     expect(broadcastBody['snippet']['title'], 'Sunday Worship');
     expect(broadcastBody['status']['privacyStatus'], 'unlisted');
+    expect(
+      broadcastBody['contentDetails']['monitorStream']['enableMonitorStream'],
+      isFalse,
+    );
     expect(requests.last.url.queryParameters['streamId'], 'stream-1');
     expect(statuses, [
       YouTubeConnectionStatus.creatingBroadcast,

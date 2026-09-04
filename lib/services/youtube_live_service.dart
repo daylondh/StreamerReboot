@@ -79,6 +79,7 @@ class YouTubeLiveService extends ChangeNotifier {
     http.Client Function()? httpClientFactory,
     this.ingestPollInterval = const Duration(seconds: 2),
     this.ingestTimeout = const Duration(seconds: 45),
+    this.completionDrainTimeout = const Duration(seconds: 20),
   }) : _configuredCredentialsFile = credentialsFile,
        _credentialStore =
            credentialStore ?? const SecureYouTubeCredentialStore(),
@@ -94,6 +95,7 @@ class YouTubeLiveService extends ChangeNotifier {
   final http.Client Function() _httpClientFactory;
   final Duration ingestPollInterval;
   final Duration ingestTimeout;
+  final Duration completionDrainTimeout;
   File? _credentialsFile;
   AutoRefreshingAuthClient? _client;
   YouTubeApi? _api;
@@ -273,6 +275,7 @@ class YouTubeLiveService extends ChangeNotifier {
             enableAutoStop: false,
             enableDvr: true,
             recordFromStart: true,
+            monitorStream: MonitorStreamInfo(enableMonitorStream: false),
           ),
         ),
         ['snippet', 'status', 'contentDetails'],
@@ -295,8 +298,11 @@ class YouTubeLiveService extends ChangeNotifier {
       final streamId = stream.id;
       final ingestion = stream.cdn?.ingestionInfo;
       final secureAddress = ingestion?.rtmpsIngestionAddress;
-      final fallbackAddress = ingestion?.ingestionAddress;
-      final address = secureAddress ?? fallbackAddress;
+      final standardAddress = ingestion?.ingestionAddress;
+      // This FFmpeg/VideoToolbox environment consistently receives Apple's
+      // errSSLClosedAbort (-9806) over RTMPS. Prefer YouTube's API-provided
+      // standard RTMP endpoint and retain RTMPS as a one-time alternate.
+      final address = standardAddress ?? secureAddress;
       final streamName = ingestion?.streamName;
       if (broadcastId == null ||
           streamId == null ||
@@ -315,8 +321,8 @@ class YouTubeLiveService extends ChangeNotifier {
         ingestionUrl:
             '${_withExplicitRtmpsPort(address).replaceFirst(RegExp(r'/+$'), '')}'
             '/$streamName',
-        fallbackIngestionUrl: secureAddress != null && fallbackAddress != null
-            ? '${fallbackAddress.replaceFirst(RegExp(r'/+$'), '')}/$streamName'
+        fallbackIngestionUrl: secureAddress != null && standardAddress != null
+            ? '${_withExplicitRtmpsPort(secureAddress).replaceFirst(RegExp(r'/+$'), '')}/$streamName'
             : null,
       );
       _setStatus(YouTubeConnectionStatus.broadcastReady);
@@ -366,13 +372,41 @@ class YouTubeLiveService extends ChangeNotifier {
         final streamStatus = response.items?.firstOrNull?.status;
         if (streamStatus?.streamStatus == 'active') {
           _setStatus(YouTubeConnectionStatus.ingestActive);
-          _setStatus(YouTubeConnectionStatus.transitioningLive);
-          await api.liveBroadcasts.transition('live', target.broadcastId, [
-            'id',
-            'status',
-          ]);
-          _setStatus(YouTubeConnectionStatus.live);
-          return;
+          while (stopwatch.elapsed < ingestTimeout) {
+            if (generation != _startGeneration) {
+              throw StateError('YouTube live transition was cancelled.');
+            }
+            final broadcasts = await api.liveBroadcasts.list(
+              ['status'],
+              id: [target.broadcastId],
+            );
+            final lifeCycle =
+                broadcasts.items?.firstOrNull?.status?.lifeCycleStatus;
+            debugPrint('[YouTube lifecycle] ${lifeCycle ?? 'unknown'}');
+            switch (lifeCycle) {
+              case 'live':
+                _setStatus(YouTubeConnectionStatus.live);
+                return;
+              case 'ready':
+              case 'testing':
+                _setStatus(YouTubeConnectionStatus.transitioningLive);
+                await api.liveBroadcasts.transition(
+                  'live',
+                  target.broadcastId,
+                  ['id', 'status'],
+                );
+                _setStatus(YouTubeConnectionStatus.live);
+                return;
+              case 'complete':
+              case 'revoked':
+                throw StateError(
+                  'YouTube broadcast entered the $lifeCycle state before '
+                  'going live.',
+                );
+              default:
+                await Future<void>.delayed(ingestPollInterval);
+            }
+          }
         }
         if (streamStatus?.streamStatus == 'error') {
           final health = streamStatus?.healthStatus?.status;
@@ -410,12 +444,17 @@ class YouTubeLiveService extends ChangeNotifier {
     cancelPendingStart();
     final api = _api;
     final broadcastId = _broadcastId;
+    final streamId = _streamId;
     if (api == null || (broadcastId == null && _streamId == null)) return;
 
+    final wasLive = _status == YouTubeConnectionStatus.live;
     _setStatus(YouTubeConnectionStatus.completing);
     Object? cleanupError;
     if (broadcastId != null) {
       try {
+        if (wasLive && streamId != null) {
+          await _waitForIngestDrain(api, streamId);
+        }
         // Completing retains the archive. If YouTube rejects the transition,
         // preserve every remote resource rather than risk destroying a video.
         await api.liveBroadcasts.transition('complete', broadcastId, [
@@ -437,6 +476,21 @@ class YouTubeLiveService extends ChangeNotifier {
       throw cleanupError;
     }
     _setStatus(YouTubeConnectionStatus.connected);
+  }
+
+  Future<void> _waitForIngestDrain(YouTubeApi api, String streamId) async {
+    final stopwatch = Stopwatch()..start();
+    while (stopwatch.elapsed < completionDrainTimeout) {
+      final response = await api.liveStreams.list(['status'], id: [streamId]);
+      final status = response.items?.firstOrNull?.status?.streamStatus;
+      debugPrint('[YouTube ingest drain] ${status ?? 'unknown'}');
+      if (status != 'active') return;
+      await Future<void>.delayed(ingestPollInterval);
+    }
+    debugPrint(
+      '[YouTube ingest drain] Timed out after '
+      '${completionDrainTimeout.inSeconds}s; completing broadcast.',
+    );
   }
 
   Future<void> disconnect() async {
