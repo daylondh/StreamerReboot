@@ -1,0 +1,39 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Flutter: Get packages",
+      "type": "shell",
+      "command": "flutter",
+      "args": ["pub", "get"],
+      "group": "build",
+      "problemMatcher": "$dart-build"
+    },
+    {
+      "label": "Flutter: Analyze",
+      "type": "shell",
+      "command": "flutter",
+      "args": ["analyze"],
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "problemMatcher": "$dart-build"
+    },
+    {
+      "label": "Flutter: Test",
+      "type": "shell",
+      "command": "flutter",
+      "args": ["test"],
+      "group": "test",
+      "problemMatcher": "$dart-build"
+    },
+    {
+      "label": "Flutter: Verify",
+      "dependsOrder": "sequence",
+      "dependsOn": ["Flutter: Analyze", "Flutter: Test"],
+      "group": "test",
+      "problemMatcher": []
+    }
+  ]
+}

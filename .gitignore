@@ -1,0 +1,63 @@
+# Operating system files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editor and IDE files
+.atom/
+.history/
+.idea/
+*.iml
+*.ipr
+*.iws
+*.swp
+*.swo
+*~
+
+# Keep shared VS Code launch, task, and extension recommendations. Ignore only
+# machine-specific settings.
+.vscode/settings.json
+
+# Logs and temporary files
+*.log
+*.tmp
+.buildlog/
+migrate_working_dir/
+
+# Secrets and local configuration
+client_secrets.json
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
+*.p12
+*.pem
+*.key
+
+# Dart and Flutter
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
+/coverage/
+*.class
+
+# Flutter release artifacts
+app.*.symbols
+app.*.map.json
+
+# Android build artifacts
+/android/app/debug
+/android/app/profile
+/android/app/release
+
+# Apple build artifacts and local Xcode state
+.build/
+.swiftpm/
+**/DerivedData/
+**/xcuserdata/
+**/*.xcuserstate

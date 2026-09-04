@@ -1,0 +1,62 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Church Streamer (active desktop)",
+      "request": "launch",
+      "type": "dart",
+      "program": "lib/main.dart",
+      "flutterMode": "debug"
+    },
+    {
+      "name": "Church Streamer (macOS)",
+      "request": "launch",
+      "type": "dart",
+      "program": "lib/main.dart",
+      "deviceId": "macos",
+      "flutterMode": "debug"
+    },
+    {
+      "name": "Church Streamer (Windows)",
+      "request": "launch",
+      "type": "dart",
+      "program": "lib/main.dart",
+      "deviceId": "windows",
+      "flutterMode": "debug"
+    },
+    {
+      "name": "Church Streamer (Linux)",
+      "request": "launch",
+      "type": "dart",
+      "program": "lib/main.dart",
+      "deviceId": "linux",
+      "flutterMode": "debug"
+    },
+    {
+      "name": "Church Streamer (profile)",
+      "request": "launch",
+      "type": "dart",
+      "program": "lib/main.dart",
+      "flutterMode": "profile"
+    },
+    {
+      "name": "Church Streamer (release)",
+      "request": "launch",
+      "type": "dart",
+      "program": "lib/main.dart",
+      "flutterMode": "release"
+    },
+    {
+      "name": "All tests",
+      "request": "launch",
+      "type": "dart",
+      "program": "test"
+    },
+    {
+      "name": "Current test file",
+      "request": "launch",
+      "type": "dart",
+      "program": "${file}"
+    }
+  ]
+}
