@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:file_selector/file_selector.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'controllers/audio_sources_controller.dart';
 import 'controllers/camera_sources_controller.dart';
 import 'controllers/stream_controller.dart';
@@ -12,6 +13,7 @@ import 'domain/stream_session.dart';
 import 'services/media_permission_service.dart';
 import 'services/stream_engine.dart';
 import 'services/stream_settings_store.dart';
+import 'services/youtube_live_service.dart';
 
 const kAccentLime = Color(0xff00ff0f);
 const kAccentBlue = Color(0xff00aeff);
@@ -70,6 +72,7 @@ class _StartupGateState extends State<_StartupGate> {
   StreamController? _controller;
   CameraSourcesController? _cameraSources;
   LocalRecordingStreamEngine? _recordingEngine;
+  YouTubeLiveService? _youtube;
 
   @override
   void initState() {
@@ -89,24 +92,29 @@ class _StartupGateState extends State<_StartupGate> {
         return null;
       },
     );
+    final youtube = YouTubeLiveService();
     final controller = StreamController(
       recordingEngine,
       settingsStore: SharedPreferencesStreamSettingsStore(),
     );
     await Future.wait([
       controller.initialize(),
+      recordingEngine.checkFfmpegAvailability(),
+      youtube.initialize(),
       Future<void>.delayed(const Duration(milliseconds: 1200)),
     ]);
     if (!mounted) {
       controller.dispose();
       cameraSources.dispose();
       recordingEngine.dispose();
+      youtube.dispose();
       return;
     }
     setState(() {
       _controller = controller;
       _cameraSources = cameraSources;
       _recordingEngine = recordingEngine;
+      _youtube = youtube;
     });
   }
 
@@ -117,6 +125,7 @@ class _StartupGateState extends State<_StartupGate> {
         controller: _controller!,
         cameraSources: _cameraSources!,
         recordingEngine: _recordingEngine!,
+        youtube: _youtube!,
       );
     }
     return const _LoadingSplash();
@@ -164,11 +173,13 @@ class StreamDashboard extends StatefulWidget {
     required this.controller,
     required this.cameraSources,
     required this.recordingEngine,
+    required this.youtube,
     super.key,
   });
   final StreamController controller;
   final CameraSourcesController cameraSources;
   final LocalRecordingStreamEngine recordingEngine;
+  final YouTubeLiveService youtube;
 
   @override
   State<StreamDashboard> createState() => _StreamDashboardState();
@@ -212,6 +223,7 @@ class _StreamDashboardState extends State<StreamDashboard> {
     widget.controller.removeListener(_syncTextFromSession);
     _cameraSources.dispose();
     widget.recordingEngine.dispose();
+    widget.youtube.dispose();
     _audioSources.dispose();
     widget.controller.dispose();
     super.dispose();
@@ -384,6 +396,7 @@ class _StreamDashboardState extends State<StreamDashboard> {
                                 titleController: _titleController,
                                 startupTextController: _startupTextController,
                                 shutdownTextController: _shutdownTextController,
+                                youtube: widget.youtube,
                               ),
                             ),
                             const SizedBox(width: 16),
@@ -443,7 +456,7 @@ class _Header extends StatelessWidget {
             style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
           ),
           Text(
-            'Sunday-morning control room',
+            'Manage your church streams',
             style: TextStyle(color: Colors.black54),
           ),
         ],
@@ -460,11 +473,13 @@ class _SettingsPanel extends StatelessWidget {
     required this.titleController,
     required this.startupTextController,
     required this.shutdownTextController,
+    required this.youtube,
   });
   final StreamController controller;
   final TextEditingController titleController;
   final TextEditingController startupTextController;
   final TextEditingController shutdownTextController;
+  final YouTubeLiveService youtube;
 
   Future<void> _chooseRecordingDirectory() async {
     final path = await getDirectoryPath(
@@ -640,10 +655,9 @@ class _SettingsPanel extends StatelessWidget {
             value: 'Start now',
           ),
           const SizedBox(height: 14),
-          const _SettingRow(
-            icon: Icons.cloud_outlined,
-            label: 'Destination',
-            value: 'YouTube',
+          ListenableBuilder(
+            listenable: youtube,
+            builder: (context, _) => _YouTubeDestination(youtube: youtube),
           ),
           if (session.error != null) ...[
             const SizedBox(height: 18),
@@ -655,6 +669,67 @@ class _SettingsPanel extends StatelessWidget {
           ],
         ],
       ),
+    );
+  }
+}
+
+class _YouTubeDestination extends StatelessWidget {
+  const _YouTubeDestination({required this.youtube});
+  final YouTubeLiveService youtube;
+
+  @override
+  Widget build(BuildContext context) {
+    final busy = youtube.status == YouTubeConnectionStatus.authorizing;
+    final (label, detail) = switch (youtube.status) {
+      YouTubeConnectionStatus.checkingCredentials => (
+        'YouTube',
+        'Checking credentials…',
+      ),
+      YouTubeConnectionStatus.credentialsMissing => (
+        'YouTube setup required',
+        'Add client_secrets.json to the project folder.',
+      ),
+      YouTubeConnectionStatus.disconnected => ('YouTube', 'Ready to connect'),
+      YouTubeConnectionStatus.authorizing => (
+        'YouTube',
+        'Complete sign-in in your browser…',
+      ),
+      YouTubeConnectionStatus.connected => (
+        youtube.channelTitle ?? 'YouTube',
+        'Connected',
+      ),
+      YouTubeConnectionStatus.preparingBroadcast => (
+        youtube.channelTitle ?? 'YouTube',
+        'Creating broadcast…',
+      ),
+      YouTubeConnectionStatus.broadcastReady => (
+        youtube.channelTitle ?? 'YouTube',
+        'Broadcast ready',
+      ),
+      YouTubeConnectionStatus.error => (
+        'YouTube error',
+        youtube.error ?? 'Could not connect.',
+      ),
+    };
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _SettingRow(icon: Icons.cloud_outlined, label: label, value: detail),
+        if (youtube.hasCredentials && !youtube.isConnected) ...[
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            key: const Key('connect-youtube'),
+            onPressed: busy ? null : youtube.connect,
+            icon: busy
+                ? const SizedBox.square(
+                    dimension: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.login),
+            label: const Text('Connect YouTube'),
+          ),
+        ],
+      ],
     );
   }
 }
@@ -1319,6 +1394,25 @@ class _GoLiveBar extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(fontSize: 12, color: Colors.black54),
                   ),
+                if (recordingEngine.ffmpegAvailability ==
+                    FfmpegAvailability.unavailable)
+                  Wrap(
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      const Text(
+                        'FFmpeg is required before you can go live.',
+                        key: Key('ffmpeg-missing'),
+                        style: TextStyle(fontSize: 12, color: Colors.red),
+                      ),
+                      TextButton(
+                        key: const Key('ffmpeg-download'),
+                        onPressed: () => launchUrl(
+                          Uri.parse('https://ffmpeg.org/download.html'),
+                        ),
+                        child: const Text('Get FFmpeg'),
+                      ),
+                    ],
+                  ),
               ],
             ),
           ),
@@ -1328,7 +1422,13 @@ class _GoLiveBar extends StatelessWidget {
           width: 240,
           child: FilledButton.icon(
             key: const Key('go-live'),
-            onPressed: session.isBusy ? null : controller.toggleLive,
+            onPressed:
+                session.isBusy ||
+                    (!session.isLive &&
+                        recordingEngine.ffmpegAvailability !=
+                            FfmpegAvailability.available)
+                ? null
+                : controller.toggleLive,
             style: FilledButton.styleFrom(
               minimumSize: const Size.fromHeight(56),
               backgroundColor: session.isLive ? kAccentBlue : kAccentGreen,
@@ -1362,8 +1462,9 @@ class _GoLiveBar extends StatelessWidget {
     RecordingLifecycleStage.starting => 'Opening ${event.detail}…',
     RecordingLifecycleStage.recording => 'Recording ${event.detail}',
     RecordingLifecycleStage.switchingCamera => 'Switching to ${event.detail}…',
-    RecordingLifecycleStage.segmentSaved => 'Saved ${event.detail}',
     RecordingLifecycleStage.stopping => 'Finishing recording…',
+    RecordingLifecycleStage.finalizing => 'Combining camera changes…',
+    RecordingLifecycleStage.recordingSaved => 'Saved ${event.detail}',
     RecordingLifecycleStage.stopped => event.detail,
   };
 }

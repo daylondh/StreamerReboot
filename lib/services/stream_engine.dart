@@ -32,8 +32,9 @@ enum RecordingLifecycleStage {
   starting,
   recording,
   switchingCamera,
-  segmentSaved,
   stopping,
+  finalizing,
+  recordingSaved,
   stopped,
 }
 
@@ -46,28 +47,50 @@ class RecordingLifecycleEvent {
 
 typedef VideoRecorderResolver = VideoRecorder? Function(String cameraName);
 typedef DefaultRecordingDirectory = Future<Directory> Function();
+typedef VideoSegmentMerger =
+    Future<void> Function(List<String> inputPaths, String outputPath);
+typedef FfmpegChecker = Future<bool> Function();
 
-/// Records locally. Camera changes finish the current file and begin a
-/// numbered segment from the newly selected camera.
+enum FfmpegAvailability { checking, available, unavailable }
+
+/// Records locally, joining the native clips created by camera changes into a
+/// single file when the session ends.
 class LocalRecordingStreamEngine extends ChangeNotifier
     implements StreamEngine {
   LocalRecordingStreamEngine({
     required this.recorderForCamera,
     DefaultRecordingDirectory? defaultDirectory,
-  }) : _defaultDirectory = defaultDirectory ?? getApplicationDocumentsDirectory;
+    VideoSegmentMerger? segmentMerger,
+    FfmpegChecker? ffmpegChecker,
+  }) : _defaultDirectory = defaultDirectory ?? getApplicationDocumentsDirectory,
+       _segmentMerger = segmentMerger ?? _mergeSegmentsWithFfmpeg,
+       _ffmpegChecker = ffmpegChecker ?? _isFfmpegInstalled;
 
   final VideoRecorderResolver recorderForCamera;
   final DefaultRecordingDirectory _defaultDirectory;
+  final VideoSegmentMerger _segmentMerger;
+  final FfmpegChecker _ffmpegChecker;
   final List<RecordingLifecycleEvent> _trace = [];
   final List<String> _recordedFiles = [];
+  final List<String> _temporarySegments = [];
   VideoRecorder? _activeRecorder;
   String? _activeCameraName;
   StreamSession? _activeSession;
-  int _segment = 0;
+  FfmpegAvailability _ffmpegAvailability = FfmpegAvailability.checking;
 
   List<RecordingLifecycleEvent> get trace => List.unmodifiable(_trace);
   List<String> get recordedFiles => List.unmodifiable(_recordedFiles);
   bool get isRecording => _activeRecorder != null;
+  FfmpegAvailability get ffmpegAvailability => _ffmpegAvailability;
+
+  Future<void> checkFfmpegAvailability() async {
+    _ffmpegAvailability = FfmpegAvailability.checking;
+    notifyListeners();
+    _ffmpegAvailability = await _ffmpegChecker()
+        ? FfmpegAvailability.available
+        : FfmpegAvailability.unavailable;
+    notifyListeners();
+  }
 
   @override
   Future<void> start(StreamSession session) async {
@@ -82,9 +105,9 @@ class LocalRecordingStreamEngine extends ChangeNotifier
       throw StateError('Select a ready camera before going live.');
     }
     _activeSession = session;
-    _segment = 1;
     _trace.clear();
     _recordedFiles.clear();
+    _temporarySegments.clear();
     _addEvent(RecordingLifecycleStage.starting, cameraName);
     try {
       await _startCamera(cameraName);
@@ -101,8 +124,7 @@ class LocalRecordingStreamEngine extends ChangeNotifier
     }
     _addEvent(RecordingLifecycleStage.switchingCamera, cameraName);
     final previousCamera = _activeCameraName!;
-    await _finishSegment();
-    _segment++;
+    await _finishCameraClip();
     try {
       await _startCamera(cameraName);
     } catch (_) {
@@ -119,13 +141,16 @@ class LocalRecordingStreamEngine extends ChangeNotifier
       return;
     }
     _addEvent(RecordingLifecycleStage.stopping, session.shutdownText);
-    await _finishSegment();
-    _activeSession = null;
-    _activeCameraName = null;
+    await _finishCameraClip();
     _addEvent(
-      RecordingLifecycleStage.stopped,
-      '${_recordedFiles.length} file(s) saved',
+      RecordingLifecycleStage.finalizing,
+      '${_temporarySegments.length} clip(s)',
     );
+    final savedPath = await _saveRecording(session);
+    _recordedFiles.add(savedPath);
+    _addEvent(RecordingLifecycleStage.recordingSaved, savedPath);
+    _clearActiveSession();
+    _addEvent(RecordingLifecycleStage.stopped, '1 file saved');
   }
 
   Future<void> _startCamera(String cameraName) async {
@@ -144,47 +169,149 @@ class LocalRecordingStreamEngine extends ChangeNotifier
     _addEvent(RecordingLifecycleStage.recording, cameraName);
   }
 
-  Future<void> _finishSegment() async {
+  Future<void> _finishCameraClip() async {
     final recorder = _activeRecorder;
-    final session = _activeSession;
-    if (recorder == null || session == null) return;
+    if (recorder == null) return;
     final temporaryPath = await recorder.stop();
     _activeRecorder = null;
     _activeCameraName = null;
-    final savedPath = await _saveSegment(temporaryPath, session);
-    _recordedFiles.add(savedPath);
-    _addEvent(RecordingLifecycleStage.segmentSaved, savedPath);
+    if (!await File(temporaryPath).exists()) {
+      throw StateError('The camera did not produce a recording file.');
+    }
+    _temporarySegments.add(temporaryPath);
   }
 
-  Future<String> _saveSegment(
-    String temporaryPath,
-    StreamSession session,
-  ) async {
-    final source = File(temporaryPath);
-    if (!await source.exists()) {
-      throw StateError('The camera did not produce a recording file.');
+  Future<String> _saveRecording(StreamSession session) async {
+    if (_temporarySegments.isEmpty) {
+      throw StateError('The camera did not produce any recording clips.');
     }
     final directory = session.recordingDirectory.isEmpty
         ? await _defaultDirectory()
         : Directory(session.recordingDirectory);
     await directory.create(recursive: true);
-    final extension = _extensionOf(temporaryPath);
+    final extension = _extensionOf(_temporarySegments.first);
     final timestamp = DateTime.now().toIso8601String().replaceAll(':', '-');
     final title = _safeFileName(session.title);
-    final segmentSuffix = _segment == 1 ? '' : '-part-$_segment';
     var destination = File(
-      '${directory.path}${Platform.pathSeparator}$title-$timestamp$segmentSuffix$extension',
+      '${directory.path}${Platform.pathSeparator}$title-$timestamp$extension',
     );
     var duplicate = 2;
     while (await destination.exists()) {
       destination = File(
-        '${directory.path}${Platform.pathSeparator}$title-$timestamp$segmentSuffix-$duplicate$extension',
+        '${directory.path}${Platform.pathSeparator}$title-$timestamp-$duplicate$extension',
       );
       duplicate++;
     }
-    await source.copy(destination.path);
-    await source.delete();
+    if (_temporarySegments.length == 1) {
+      await File(_temporarySegments.single).copy(destination.path);
+    } else {
+      await _segmentMerger(
+        List.unmodifiable(_temporarySegments),
+        destination.path,
+      );
+    }
+    for (final path in _temporarySegments) {
+      final file = File(path);
+      if (await file.exists()) await file.delete();
+    }
+    _temporarySegments.clear();
     return destination.path;
+  }
+
+  void _clearActiveSession() {
+    _activeSession = null;
+    _activeCameraName = null;
+  }
+
+  static Future<void> _mergeSegmentsWithFfmpeg(
+    List<String> inputPaths,
+    String outputPath,
+  ) async {
+    try {
+      final inputs = <String>[
+        for (final path in inputPaths) ...['-i', path],
+      ];
+      final filters = <String>[
+        for (var index = 0; index < inputPaths.length; index++) ...[
+          '[$index:v:0]setpts=PTS-STARTPTS,fps=30,'
+              'scale=1280:720:force_original_aspect_ratio=decrease,'
+              'pad=1280:720:(ow-iw)/2:(oh-ih)/2,'
+              'setsar=1,format=yuv420p[v$index]',
+          '[$index:a:0]asetpts=PTS-STARTPTS,'
+              'aresample=async=1:first_pts=0[a$index]',
+        ],
+        '${List.generate(inputPaths.length, (index) => '[v$index][a$index]').join()}'
+            'concat=n=${inputPaths.length}:v=1:a=1[outv][outa]',
+      ];
+      final result = await _runFfmpeg([
+        '-hide_banner',
+        '-loglevel',
+        'error',
+        ...inputs,
+        '-filter_complex',
+        filters.join(';'),
+        '-map',
+        '[outv]',
+        '-map',
+        '[outa]',
+        '-c:v',
+        'mpeg4',
+        '-q:v',
+        '3',
+        '-c:a',
+        'aac',
+        '-b:a',
+        '192k',
+        '-movflags',
+        '+faststart',
+        '-y',
+        outputPath,
+      ]);
+      if (result == null) {
+        throw ProcessException('ffmpeg', []);
+      }
+      if (result.exitCode != 0) {
+        await _deleteIfPresent(File(outputPath));
+        throw StateError('Could not finalize recording: ${result.stderr}');
+      }
+    } on ProcessException catch (error) {
+      throw StateError(
+        'Could not finalize recording because FFmpeg is unavailable: $error',
+      );
+    }
+  }
+
+  static Future<bool> _isFfmpegInstalled() async {
+    final result = await _runFfmpeg(['-version']);
+    return result?.exitCode == 0;
+  }
+
+  static Future<ProcessResult?> _runFfmpeg(List<String> arguments) async {
+    for (final executable in _ffmpegCandidates) {
+      try {
+        return await Process.run(executable, arguments);
+      } on ProcessException {
+        // GUI apps often lack the shell PATH, so try known install locations.
+      }
+    }
+    return null;
+  }
+
+  static List<String> get _ffmpegCandidates => [
+    'ffmpeg',
+    if (Platform.isMacOS) ...[
+      '/usr/local/bin/ffmpeg',
+      '/opt/homebrew/bin/ffmpeg',
+      '/opt/local/bin/ffmpeg',
+    ],
+  ];
+
+  static Future<void> _deleteIfPresent(File file) async {
+    try {
+      if (await file.exists()) await file.delete();
+    } on FileSystemException {
+      // Cleanup must not hide the original recording/finalization result.
+    }
   }
 
   String _safeFileName(String value) {

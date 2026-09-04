@@ -15,9 +15,9 @@ This first slice runs on Windows, macOS, and Linux and includes:
 - a tested stream-session state machine; and
 - a `StreamEngine` boundary ready for native capture.
 
-The current engine is deliberately simulated: **Go live does not publish video
-yet**. This proves the UI and lifecycle without accidentally starting a real
-broadcast.
+Local recording is functional. YouTube authorization and live-event
+provisioning are implemented; the FFmpeg RTMP media publisher is the next
+transport milestone, so **Go live does not publish video yet**.
 
 ## Run it
 
@@ -27,6 +27,21 @@ flutter run -d macos   # or windows / linux
 ```
 
 Run checks with `flutter analyze` and `flutter test`.
+
+## YouTube API setup
+
+1. In Google Cloud Console, enable **YouTube Data API v3**.
+2. Configure the OAuth consent screen and add the channel operators as test
+   users while the app remains in testing.
+3. Create an OAuth client ID with application type **Desktop app**.
+4. Download its JSON credentials, rename the file to `client_secrets.json`, and
+   place it in the project root. This filename is ignored by Git.
+5. Restart Church Streamer and select **Connect YouTube**. Authorization opens
+   in the system browser and returns through a temporary localhost callback.
+
+Use `client_secrets.example.json` as a shape reference only. Never commit the
+downloaded credentials or expose the RTMP ingestion URL, which contains the
+channel's stream key.
 
 ### Linux camera prerequisites
 
