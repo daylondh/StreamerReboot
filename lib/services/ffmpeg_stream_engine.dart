@@ -40,6 +40,7 @@ class FfmpegStreamEngine extends ChangeNotifier
   final List<RecordingLifecycleEvent> _trace = [];
   final List<String> _recordedFiles = [];
   final List<String> _stderr = [];
+  final List<String> _transportDiagnostics = [];
   final List<StreamSubscription<Uint8List>> _audioSubscriptions = [];
   final Map<AudioSource, _PcmQueue> _audioQueues = {};
 
@@ -99,6 +100,7 @@ class FfmpegStreamEngine extends ChangeNotifier
     _trace.clear();
     _recordedFiles.clear();
     _stderr.clear();
+    _transportDiagnostics.clear();
     _transportError = null;
     _addEvent(RecordingLifecycleStage.starting, cameraName);
     try {
@@ -135,8 +137,10 @@ class FfmpegStreamEngine extends ChangeNotifier
           .transform(utf8.decoder)
           .transform(const LineSplitter())
           .listen((line) {
-            _stderr.add(_sanitizeDiagnostic(line));
+            final diagnostic = _sanitizeDiagnostic(line);
+            _stderr.add(diagnostic);
             if (_stderr.length > 30) _stderr.removeAt(0);
+            debugPrint('[FFmpeg] $diagnostic');
           });
       _videoSocket = await videoConnection.timeout(const Duration(seconds: 5));
       _audioSocket = await audioConnection.timeout(const Duration(seconds: 5));
@@ -367,38 +371,46 @@ class FfmpegStreamEngine extends ChangeNotifier
         _recordTransportError(channel, error);
       },
     );
+    unawaited(
+      socket.done.catchError((Object error, StackTrace stackTrace) {
+        _recordTransportError(channel, error);
+      }),
+    );
   }
 
   void _recordTransportError(String channel, Object error) {
     _transportError ??= error;
     final message = _sanitizeDiagnostic('$channel transport: $error');
-    _stderr.add(message);
-    if (_stderr.length > 30) _stderr.removeAt(0);
+    _transportDiagnostics.add(message);
+    debugPrint('[FFmpeg transport] $message');
+    if (_transportDiagnostics.length > 10) {
+      _transportDiagnostics.removeAt(0);
+    }
   }
 
   Future<void> _tearDownMedia({required bool killProcess}) async {
     _audioTimer?.cancel();
     _audioTimer = null;
     for (final subscription in _audioSubscriptions) {
-      await subscription.cancel();
+      await _ignoreCleanup(subscription.cancel(), 'audio subscription');
     }
     _audioSubscriptions.clear();
     _audioQueues.clear();
     final camera = _camera;
     _camera = null;
     if (camera?.value.isStreamingImages ?? false) {
-      await camera!.stopImageStream();
+      await _ignoreCleanup(camera!.stopImageStream(), 'camera image stream');
     }
-    await _videoSocket?.close();
-    await _audioSocket?.close();
-    await _videoServer?.close();
-    await _audioServer?.close();
+    if (killProcess) _process?.kill();
+    await _ignoreCleanup(_videoSocket?.close(), 'video socket');
+    await _ignoreCleanup(_audioSocket?.close(), 'audio socket');
+    await _ignoreCleanup(_videoServer?.close(), 'video server');
+    await _ignoreCleanup(_audioServer?.close(), 'audio server');
     _videoSocket = null;
     _audioSocket = null;
     _videoServer = null;
     _audioServer = null;
-    if (killProcess) _process?.kill();
-    await _stderrSubscription?.cancel();
+    await _ignoreCleanup(_stderrSubscription?.cancel(), 'FFmpeg diagnostics');
     _stderrSubscription = null;
     _process = null;
     _frameWidth = null;
@@ -407,6 +419,15 @@ class FfmpegStreamEngine extends ChangeNotifier
     _outputPath = null;
     _sensitiveIngestionUrl = null;
     _transportError = null;
+  }
+
+  Future<void> _ignoreCleanup(Future<void>? operation, String resource) async {
+    if (operation == null) return;
+    try {
+      await operation;
+    } catch (error) {
+      _recordTransportError(resource, error);
+    }
   }
 
   Future<String> _createOutputPath(StreamSession session) async {
@@ -419,16 +440,33 @@ class FfmpegStreamEngine extends ChangeNotifier
         .trim()
         .replaceAll(RegExp(r'[\/:*?"<>|]'), '-')
         .replaceAll(RegExp(r'\s+'), ' ');
-    return '${directory.path}${Platform.pathSeparator}'
-        '${title.isEmpty ? 'Church Stream' : title}-$timestamp.mp4';
+    final baseName = '${title.isEmpty ? 'Church Stream' : title}-$timestamp';
+    var output = File(
+      '${directory.path}${Platform.pathSeparator}$baseName.mp4',
+    );
+    var duplicate = 2;
+    while (await output.exists()) {
+      output = File(
+        '${directory.path}${Platform.pathSeparator}$baseName-$duplicate.mp4',
+      );
+      duplicate++;
+    }
+    return output.path;
   }
 
-  String _ffmpegFailure(String fallback) => _stderr.isEmpty
-      ? fallback
-      : _stderr.reversed.firstWhere(
-          (line) => line.trim().isNotEmpty,
-          orElse: () => fallback,
-        );
+  String _ffmpegFailure(String fallback) {
+    final ffmpegLines = _stderr
+        .where((line) => line.trim().isNotEmpty)
+        .toList();
+    if (ffmpegLines.isNotEmpty) {
+      final first = (ffmpegLines.length - 6).clamp(0, ffmpegLines.length);
+      return ffmpegLines.sublist(first).join(' | ');
+    }
+    if (_transportDiagnostics.isNotEmpty) {
+      return '$fallback ${_transportDiagnostics.last}';
+    }
+    return fallback;
+  }
 
   String _sanitizeDiagnostic(String line) {
     final target = _sensitiveIngestionUrl;

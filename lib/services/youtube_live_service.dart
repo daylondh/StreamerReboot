@@ -58,6 +58,7 @@ class YouTubeLiveTarget {
     required this.broadcastId,
     required this.streamId,
     required this.ingestionUrl,
+    this.fallbackIngestionUrl,
   });
 
   final String broadcastId;
@@ -65,6 +66,7 @@ class YouTubeLiveTarget {
 
   /// Contains the secret stream name. Never log or display this value.
   final String ingestionUrl;
+  final String? fallbackIngestionUrl;
 
   Uri get watchUrl => Uri.parse('https://www.youtube.com/watch?v=$broadcastId');
 }
@@ -109,6 +111,7 @@ class YouTubeLiveService extends ChangeNotifier {
   YouTubeLiveTarget? get target => _target;
   bool get hasCredentials => _credentialsFile != null;
   bool get isConnected => _api != null;
+  bool get canUseFallbackIngestion => _target?.fallbackIngestionUrl != null;
   String get statusMessage => switch (_status) {
     YouTubeConnectionStatus.checkingCredentials =>
       'YouTube: checking credentials…',
@@ -291,8 +294,9 @@ class YouTubeLiveService extends ChangeNotifier {
       final broadcastId = broadcast.id;
       final streamId = stream.id;
       final ingestion = stream.cdn?.ingestionInfo;
-      final address =
-          ingestion?.rtmpsIngestionAddress ?? ingestion?.ingestionAddress;
+      final secureAddress = ingestion?.rtmpsIngestionAddress;
+      final fallbackAddress = ingestion?.ingestionAddress;
+      final address = secureAddress ?? fallbackAddress;
       final streamName = ingestion?.streamName;
       if (broadcastId == null ||
           streamId == null ||
@@ -311,6 +315,9 @@ class YouTubeLiveService extends ChangeNotifier {
         ingestionUrl:
             '${_withExplicitRtmpsPort(address).replaceFirst(RegExp(r'/+$'), '')}'
             '/$streamName',
+        fallbackIngestionUrl: secureAddress != null && fallbackAddress != null
+            ? '${fallbackAddress.replaceFirst(RegExp(r'/+$'), '')}/$streamName'
+            : null,
       );
       _setStatus(YouTubeConnectionStatus.broadcastReady);
       return _target!;
@@ -318,6 +325,21 @@ class YouTubeLiveService extends ChangeNotifier {
       _setError(_friendlyError(error));
       rethrow;
     }
+  }
+
+  bool useFallbackIngestion() {
+    final target = _target;
+    final fallback = target?.fallbackIngestionUrl;
+    if (target == null || fallback == null) return false;
+    _target = YouTubeLiveTarget(
+      broadcastId: target.broadcastId,
+      streamId: target.streamId,
+      ingestionUrl: fallback,
+    );
+    if (_status != YouTubeConnectionStatus.broadcastReady) {
+      _setStatus(YouTubeConnectionStatus.broadcastReady);
+    }
+    return true;
   }
 
   /// Waits until YouTube confirms receipt of encoded media, then explicitly
@@ -376,7 +398,11 @@ class YouTubeLiveService extends ChangeNotifier {
 
   void cancelPendingStart() => _startGeneration++;
 
-  void reportPublisherError(Object error) => _setError(_friendlyError(error));
+  void reportPublisherError(Object error) {
+    final message = _friendlyError(error);
+    debugPrint('[YouTube publisher] $message');
+    _setError(message);
+  }
 
   /// Completes an active broadcast without deleting its YouTube resources.
   /// This is intentionally safe to call more than once.

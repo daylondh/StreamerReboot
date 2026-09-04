@@ -149,6 +149,7 @@ void main() {
             'cdn': {
               'ingestionInfo': {
                 'rtmpsIngestionAddress': 'rtmps://a.rtmps.youtube.com/live2',
+                'ingestionAddress': 'rtmp://a.rtmp.youtube.com/live2',
                 'streamName': 'secret-key',
               },
             },
@@ -173,6 +174,15 @@ void main() {
     expect(
       target.ingestionUrl,
       'rtmps://a.rtmps.youtube.com:443/live2/secret-key',
+    );
+    expect(
+      target.fallbackIngestionUrl,
+      'rtmp://a.rtmp.youtube.com/live2/secret-key',
+    );
+    expect(service.useFallbackIngestion(), isTrue);
+    expect(
+      service.target?.ingestionUrl,
+      'rtmp://a.rtmp.youtube.com/live2/secret-key',
     );
     expect(requests, hasLength(3));
     final broadcastBody = jsonDecode(requests.first.body);

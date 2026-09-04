@@ -1,4 +1,5 @@
 import '../domain/stream_session.dart';
+import 'package:flutter/foundation.dart';
 import 'stream_engine.dart';
 import 'youtube_live_service.dart';
 
@@ -18,29 +19,40 @@ class YouTubeProvisioningStreamEngine implements StreamEngine {
       throw StateError('Connect a YouTube channel before going live.');
     }
     await youtube.prepareBroadcast(session);
-    await localRecording.start(session);
-    try {
-      if (localRecording case StreamProcessMonitor monitor) {
-        final outcome = await Future.any<Object?>([
-          youtube.startBroadcast(),
-          monitor.processExitCode.then<Object?>((exitCode) {
-            return StateError(
-              'FFmpeg exited with code $exitCode before YouTube received '
-              'video: ${monitor.diagnosticSummary}',
-            );
-          }),
-        ]);
-        if (outcome case final Object error) {
-          youtube.reportPublisherError(error);
-          throw error;
+    while (true) {
+      try {
+        await localRecording.start(session);
+        if (localRecording case StreamProcessMonitor monitor) {
+          final outcome = await Future.any<Object?>([
+            youtube.startBroadcast(),
+            monitor.processExitCode.then<Object?>((exitCode) {
+              return StateError(
+                'FFmpeg exited with code $exitCode before YouTube received '
+                'video: ${monitor.diagnosticSummary}',
+              );
+            }),
+          ]);
+          if (outcome case final Object error) {
+            youtube.reportPublisherError(error);
+            throw error;
+          }
+        } else {
+          await youtube.startBroadcast();
         }
-      } else {
-        await youtube.startBroadcast();
+        return;
+      } catch (error, stackTrace) {
+        debugPrint('[Stream startup] $error');
+        youtube.cancelPendingStart();
+        try {
+          await localRecording.stop(session);
+        } catch (_) {
+          // Preserve the failure which caused this attempt to abort.
+        }
+        if (youtube.useFallbackIngestion()) {
+          continue;
+        }
+        Error.throwWithStackTrace(error, stackTrace);
       }
-    } catch (_) {
-      youtube.cancelPendingStart();
-      await localRecording.stop(session);
-      rethrow;
     }
   }
 
