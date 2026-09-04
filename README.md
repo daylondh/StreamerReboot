@@ -1,8 +1,11 @@
 # Church Streamer
 
-A cross-platform successor to the original ChurchStreamer: a calm,
+A desktop successor to the original ChurchStreamer: a calm,
 volunteer-friendly desktop app for starting a church livestream and local
 recording without requiring operators to understand broadcast software.
+
+Supported platforms are macOS, Windows, and desktop Linux. Android and iOS are
+intentionally out of scope.
 
 ## Current milestone
 
@@ -54,8 +57,15 @@ The Linux camera backend uses GStreamer and V4L2. On Ubuntu or Debian, install:
 
 ```sh
 sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
-  gstreamer1.0-plugins-good pulseaudio-utils ffmpeg
+  gstreamer1.0-plugins-good pulseaudio-utils ffmpeg \
+  libsecret-1-0 libsecret-1-dev
 ```
+
+YouTube reconnection stores OAuth refresh credentials through libsecret. A
+Secret Service-compatible keyring must also be running; GNOME Keyring and KDE
+Wallet normally provide one automatically in their respective desktop
+environments. Minimal window-manager sessions may need to start a keyring
+service explicitly.
 
 macOS asks for camera permission on first launch. Windows requires no additional
 camera runtime setup.

@@ -75,6 +75,11 @@ class CameraSourcesController extends ChangeNotifier {
     _sources.clear();
   }
 
+  Future<void> release() async {
+    await _disposeSources();
+    notifyListeners();
+  }
+
   @override
   void dispose() {
     for (final source in _sources) {

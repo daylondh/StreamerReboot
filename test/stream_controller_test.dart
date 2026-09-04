@@ -43,6 +43,14 @@ class ImmediateEngine implements StreamEngine {
   }
 }
 
+class FailingStartEngine extends ImmediateEngine {
+  @override
+  Future<void> start(StreamSession session) async {
+    await super.start(session);
+    throw StateError('setup interrupted');
+  }
+}
+
 void main() {
   test('suggests a human-friendly service title', () {
     expect(
@@ -80,6 +88,18 @@ void main() {
     await controller.toggleLive();
     expect(controller.session.status, StreamStatus.idle);
     expect(engine.stops, 1);
+  });
+
+  test('shutdown stops resources after an interrupted setup', () async {
+    final engine = FailingStartEngine();
+    final controller = StreamController(engine);
+
+    await controller.toggleLive();
+    expect(controller.session.status, StreamStatus.failed);
+
+    await controller.shutdown();
+    expect(engine.stops, 1);
+    expect(controller.session.status, StreamStatus.idle);
   });
 
   test('requires a title', () async {

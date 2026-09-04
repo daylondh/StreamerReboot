@@ -13,6 +13,7 @@ class StreamController extends ChangeNotifier {
   final StreamSettingsStore? settingsStore;
   StreamSession _session;
   bool _isSwitchingCamera = false;
+  Future<void>? _activeOperation;
   StreamSession get session => _session;
   bool get isSwitchingCamera => _isSwitchingCamera;
 
@@ -126,11 +127,27 @@ class StreamController extends ChangeNotifier {
 
   Future<void> toggleLive() async {
     if (_session.isBusy) return;
-    if (_session.isLive) {
-      await _stop();
-    } else {
-      await _start();
+    final operation = _session.isLive ? _stop() : _start();
+    _activeOperation = operation;
+    try {
+      await operation;
+    } finally {
+      if (identical(_activeOperation, operation)) _activeOperation = null;
     }
+  }
+
+  /// Waits for any in-flight setup, then tears down local and remote stream
+  /// resources. Calling this when idle is safe.
+  Future<void> shutdown() async {
+    final operation = _activeOperation;
+    if (operation != null) await operation;
+    if (_session.status == StreamStatus.idle) {
+      // The engine may still own a partially-created remote resource after a
+      // failed setup, so it must receive a stop even when the session is idle.
+      await _engine.stop(_session);
+      return;
+    }
+    await _stop();
   }
 
   Future<void> _start() async {

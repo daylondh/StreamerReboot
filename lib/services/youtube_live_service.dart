@@ -94,6 +94,8 @@ class YouTubeLiveService extends ChangeNotifier {
   String? _channelTitle;
   String? _error;
   YouTubeLiveTarget? _target;
+  String? _broadcastId;
+  String? _streamId;
 
   YouTubeConnectionStatus get status => _status;
   String? get channelTitle => _channelTitle;
@@ -175,7 +177,17 @@ class YouTubeLiveService extends ChangeNotifier {
   }
 
   Future<void> _reconnect(File file) async {
-    final stored = await _credentialStore.read();
+    String? stored;
+    try {
+      stored = await _credentialStore.read();
+    } catch (error) {
+      _setError(
+        Platform.isLinux
+            ? 'Secure credential storage is unavailable. Install libsecret and start a Secret Service keyring.'
+            : 'Secure credential storage is unavailable: ${_friendlyError(error)}',
+      );
+      return;
+    }
     if (stored == null) return;
     _setStatus(YouTubeConnectionStatus.reconnecting);
     try {
@@ -198,7 +210,11 @@ class YouTubeLiveService extends ChangeNotifier {
       _client = null;
       _api = null;
       _channelTitle = null;
-      await _credentialStore.delete();
+      try {
+        await _credentialStore.delete();
+      } catch (_) {
+        // The connection can still fall back even if secure-store cleanup fails.
+      }
       _setStatus(YouTubeConnectionStatus.disconnected);
     }
   }
@@ -245,6 +261,7 @@ class YouTubeLiveService extends ChangeNotifier {
         ),
         ['snippet', 'status', 'contentDetails'],
       );
+      _broadcastId = broadcast.id;
       _setStatus(YouTubeConnectionStatus.creatingStream);
       final stream = await api.liveStreams.insert(
         LiveStream(
@@ -257,6 +274,7 @@ class YouTubeLiveService extends ChangeNotifier {
         ),
         ['snippet', 'cdn', 'status'],
       );
+      _streamId = stream.id;
       final broadcastId = broadcast.id;
       final streamId = stream.id;
       final ingestion = stream.cdn?.ingestionInfo;
@@ -287,13 +305,58 @@ class YouTubeLiveService extends ChangeNotifier {
     }
   }
 
+  /// Completes an active broadcast without deleting its YouTube resources.
+  /// This is intentionally safe to call more than once.
+  Future<void> finishBroadcast() async {
+    final api = _api;
+    final broadcastId = _broadcastId;
+    if (api == null || (broadcastId == null && _streamId == null)) return;
+
+    _setStatus(YouTubeConnectionStatus.completing);
+    Object? cleanupError;
+    if (broadcastId != null) {
+      try {
+        // Completing retains the archive. If YouTube rejects the transition,
+        // preserve every remote resource rather than risk destroying a video.
+        await api.liveBroadcasts.transition('complete', broadcastId, [
+          'status',
+        ]);
+      } catch (error) {
+        cleanupError = error;
+      }
+    }
+
+    _target = null;
+    _broadcastId = null;
+    _streamId = null;
+    if (cleanupError != null) {
+      _setError(
+        'Could not finalize the YouTube broadcast: '
+        '${_friendlyError(cleanupError)}',
+      );
+      throw cleanupError;
+    }
+    _setStatus(YouTubeConnectionStatus.connected);
+  }
+
   Future<void> disconnect() async {
     _client?.close();
     _client = null;
     _api = null;
     _channelTitle = null;
     _target = null;
-    await _credentialStore.delete();
+    _broadcastId = null;
+    _streamId = null;
+    try {
+      await _credentialStore.delete();
+    } catch (error) {
+      _setError(
+        Platform.isLinux
+            ? 'Could not access the system keyring. Install libsecret and start a Secret Service keyring.'
+            : 'Could not clear secure credentials: ${_friendlyError(error)}',
+      );
+      return;
+    }
     if (_status != YouTubeConnectionStatus.error) {
       _setStatus(
         hasCredentials

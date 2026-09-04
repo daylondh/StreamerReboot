@@ -141,6 +141,11 @@ class AudioSourcesController extends ChangeNotifier {
     _sources.clear();
   }
 
+  Future<void> release() async {
+    await _disposeSources();
+    notifyListeners();
+  }
+
   Future<void> _disposeSource(AudioSource source) async {
     await _stop(source);
     await source.recorder.dispose();

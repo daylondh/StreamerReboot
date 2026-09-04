@@ -23,6 +23,17 @@ class MemoryCredentialStore implements YouTubeCredentialStore {
   Future<void> delete() async => value = null;
 }
 
+class FailingCredentialStore implements YouTubeCredentialStore {
+  @override
+  Future<String?> read() => throw StateError('keyring unavailable');
+
+  @override
+  Future<void> write(String value) => throw StateError('keyring unavailable');
+
+  @override
+  Future<void> delete() => throw StateError('keyring unavailable');
+}
+
 void main() {
   test('recognizes a configured desktop OAuth credentials file', () async {
     final directory = await Directory.systemTemp.createTemp('youtube-oauth-');
@@ -88,10 +99,31 @@ void main() {
     expect(statuses.last, YouTubeConnectionStatus.connected);
   });
 
+  test('reports unavailable secure credential storage', () async {
+    final directory = await Directory.systemTemp.createTemp('youtube-oauth-');
+    addTearDown(() => directory.delete(recursive: true));
+    final file = File('${directory.path}/client_secrets.json');
+    await file.writeAsString('{"installed":{"client_id":"test"}}');
+    final service = YouTubeLiveService(
+      credentialsFile: file,
+      credentialStore: FailingCredentialStore(),
+    );
+
+    await service.initialize();
+
+    expect(service.status, YouTubeConnectionStatus.error);
+    expect(service.error, contains('credential storage'));
+  });
+
   test('creates and binds a broadcast and RTMP stream', () async {
     final requests = <http.Request>[];
     final client = MockClient((request) async {
       requests.add(request);
+      if (request.url.path.endsWith('/liveBroadcasts/transition')) {
+        return _jsonResponse(
+          '{"id":"broadcast-1","status":{"lifeCycleStatus":"complete"}}',
+        );
+      }
       if (request.url.path.endsWith('/liveBroadcasts/bind')) {
         return _jsonResponse('{"id":"broadcast-1"}');
       }
@@ -138,6 +170,40 @@ void main() {
       YouTubeConnectionStatus.bindingBroadcast,
       YouTubeConnectionStatus.broadcastReady,
     ]);
+
+    await service.finishBroadcast();
+    expect(requests.where((request) => request.method == 'DELETE'), isEmpty);
+    expect(service.status, YouTubeConnectionStatus.connected);
+  });
+
+  test('never deletes a broadcast left by interrupted setup', () async {
+    final requests = <http.Request>[];
+    final client = MockClient((request) async {
+      requests.add(request);
+      if (request.url.path.endsWith('/liveBroadcasts/transition')) {
+        return http.Response('{"error":"not live"}', 400);
+      }
+      if (request.url.path.endsWith('/liveBroadcasts')) {
+        return _jsonResponse('{"id":"broadcast-partial"}');
+      }
+      if (request.url.path.endsWith('/liveStreams')) {
+        return http.Response('{"error":"stream setup failed"}', 500);
+      }
+      return http.Response('not found', 404);
+    });
+    final service = YouTubeLiveService(api: YouTubeApi(client));
+
+    await expectLater(
+      service.prepareBroadcast(
+        const StreamSession(title: 'Interrupted service'),
+      ),
+      throwsA(anything),
+    );
+    await expectLater(service.finishBroadcast(), throwsA(anything));
+
+    expect(requests.where((request) => request.method == 'DELETE'), isEmpty);
+    expect(service.target, isNull);
+    expect(service.status, YouTubeConnectionStatus.error);
   });
 }
 

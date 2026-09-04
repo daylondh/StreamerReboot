@@ -26,5 +26,22 @@ class YouTubeProvisioningStreamEngine implements StreamEngine {
       localRecording.switchCamera(cameraName);
 
   @override
-  Future<void> stop(StreamSession session) => localRecording.stop(session);
+  Future<void> stop(StreamSession session) async {
+    Object? recordingError;
+    try {
+      await localRecording.stop(session);
+    } catch (error) {
+      recordingError = error;
+    }
+
+    Object? youtubeError;
+    try {
+      await youtube.finishBroadcast();
+    } catch (error) {
+      youtubeError = error;
+    }
+
+    if (recordingError != null) throw recordingError;
+    if (youtubeError != null) throw youtubeError;
+  }
 }

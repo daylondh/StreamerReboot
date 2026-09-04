@@ -45,12 +45,34 @@ class ChurchStreamerApp extends StatelessWidget {
       scaffoldBackgroundColor: Colors.white,
       useMaterial3: true,
       inputDecorationTheme: const InputDecorationTheme(
-        border: OutlineInputBorder(),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.all(Radius.circular(12)),
+          borderSide: BorderSide(color: Color(0x26000000)),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.all(Radius.circular(12)),
+          borderSide: BorderSide(color: Color(0x26000000)),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.all(Radius.circular(12)),
+          borderSide: BorderSide(color: kAccentBlue, width: 1.5),
+        ),
         filled: true,
-        fillColor: Colors.white,
+        fillColor: Color(0xfffafafa),
+      ),
+      tooltipTheme: const TooltipThemeData(
+        waitDuration: Duration(milliseconds: 450),
+        showDuration: Duration(seconds: 8),
+        padding: EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+        textStyle: TextStyle(color: Colors.white, fontSize: 13),
+        decoration: BoxDecoration(
+          color: Color(0xff252525),
+          borderRadius: BorderRadius.all(Radius.circular(8)),
+        ),
       ),
       cardTheme: const CardThemeData(
-        elevation: 0,
+        elevation: 1,
+        shadowColor: Color(0x18000000),
         margin: EdgeInsets.zero,
         color: Colors.white,
         shape: RoundedRectangleBorder(
@@ -199,6 +221,7 @@ class _StreamDashboardState extends State<StreamDashboard> {
   final MediaPermissionService _permissions = MediaPermissionService();
   String? _permissionMessage;
   bool _requestingPermissions = false;
+  bool _isQuitting = false;
 
   @override
   void initState() {
@@ -368,6 +391,25 @@ class _StreamDashboardState extends State<StreamDashboard> {
     });
   }
 
+  Future<void> _quit() async {
+    if (_isQuitting) return;
+    setState(() => _isQuitting = true);
+
+    try {
+      await widget.controller.shutdown();
+    } catch (error) {
+      debugPrint('Stream cleanup during quit failed: $error');
+    }
+    try {
+      await Future.wait([_cameraSources.release(), _audioSources.release()]);
+    } catch (error) {
+      debugPrint('Media resource cleanup during quit failed: $error');
+    }
+
+    await SystemNavigator.pop();
+    exit(0);
+  }
+
   @override
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: widget.controller,
@@ -380,7 +422,7 @@ class _StreamDashboardState extends State<StreamDashboard> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const _Header(),
+                _Header(onQuit: _quit, isQuitting: _isQuitting),
                 const SizedBox(height: 18),
                 Expanded(
                   child: LayoutBuilder(
@@ -395,7 +437,7 @@ class _StreamDashboardState extends State<StreamDashboard> {
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
                             SizedBox(
-                              width: 285,
+                              width: 400,
                               child: _SettingsPanel(
                                 controller: widget.controller,
                                 titleController: _titleController,
@@ -442,7 +484,10 @@ class _StreamDashboardState extends State<StreamDashboard> {
 }
 
 class _Header extends StatelessWidget {
-  const _Header();
+  const _Header({required this.onQuit, required this.isQuitting});
+
+  final Future<void> Function() onQuit;
+  final bool isQuitting;
 
   @override
   Widget build(BuildContext context) => Row(
@@ -471,15 +516,20 @@ class _Header extends StatelessWidget {
       Column(
         children: [
           TextButton(
-            onPressed: () {
-              SystemNavigator.pop();
-              exit(0);
-            },
+            onPressed: isQuitting ? null : onQuit,
             style: ButtonStyle(
               foregroundColor: WidgetStateProperty.all(kAccentBlue),
               backgroundColor: WidgetStateProperty.all(Colors.black54),
             ),
-            child: const Text('Quit'),
+            child: isQuitting
+                ? const SizedBox.square(
+                    dimension: 18,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: kAccentBlue,
+                    ),
+                  )
+                : const Text('Quit'),
           ),
           SizedBox(height: 12.0),
           const _StatusPill(label: 'System ready', color: kAccentLime),
@@ -518,20 +568,23 @@ class _SettingsPanel extends StatelessWidget {
       icon: Icons.tune,
       child: ListView(
         children: [
-          TextField(
-            key: const Key('service-title'),
-            controller: titleController,
-            enabled: !session.isLive && !session.isBusy,
-            onChanged: controller.updateTitle,
-            decoration: InputDecoration(
-              labelText: 'Stream name',
-              helperText: 'Editable; this exact name is used when streaming.',
-              suffixIcon: IconButton(
-                tooltip: 'Refresh suggested name',
-                onPressed: session.isLive || session.isBusy
-                    ? null
-                    : controller.refreshSuggestedTitle,
-                icon: const Icon(Icons.refresh),
+          Tooltip(
+            message: titleController.text,
+            child: TextField(
+              key: const Key('service-title'),
+              controller: titleController,
+              enabled: !session.isLive && !session.isBusy,
+              onChanged: controller.updateTitle,
+              decoration: InputDecoration(
+                labelText: 'Stream name',
+                helperText: 'Editable; this exact name is used when streaming.',
+                suffixIcon: IconButton(
+                  tooltip: 'Refresh suggested name',
+                  onPressed: session.isLive || session.isBusy
+                      ? null
+                      : controller.refreshSuggestedTitle,
+                  icon: const Icon(Icons.refresh),
+                ),
               ),
             ),
           ),
@@ -546,20 +599,23 @@ class _SettingsPanel extends StatelessWidget {
                 ? null
                 : controller.updateStartupSplashEnabled,
           ),
-          TextField(
-            key: const Key('startup-text'),
-            controller: startupTextController,
-            enabled:
-                session.startupSplashEnabled &&
-                !session.isLive &&
-                !session.isBusy,
-            minLines: 2,
-            maxLines: 3,
-            onChanged: controller.updateStartupText,
-            decoration: const InputDecoration(
-              labelText: 'Additional startup text',
-              hintText: 'Our service will begin shortly.',
-              helperText: 'Shown below the stream name on startup.',
+          Tooltip(
+            message: startupTextController.text,
+            child: TextField(
+              key: const Key('startup-text'),
+              controller: startupTextController,
+              enabled:
+                  session.startupSplashEnabled &&
+                  !session.isLive &&
+                  !session.isBusy,
+              minLines: 2,
+              maxLines: 3,
+              onChanged: controller.updateStartupText,
+              decoration: const InputDecoration(
+                labelText: 'Additional startup text',
+                hintText: 'Our service will begin shortly.',
+                helperText: 'Shown below the stream name on startup.',
+              ),
             ),
           ),
           const SizedBox(height: 16),
@@ -573,20 +629,23 @@ class _SettingsPanel extends StatelessWidget {
                 ? null
                 : controller.updateShutdownSplashEnabled,
           ),
-          TextField(
-            key: const Key('shutdown-text'),
-            controller: shutdownTextController,
-            enabled:
-                session.shutdownSplashEnabled &&
-                !session.isLive &&
-                !session.isBusy,
-            minLines: 2,
-            maxLines: 3,
-            onChanged: controller.updateShutdownText,
-            decoration: const InputDecoration(
-              labelText: 'Additional shutdown text',
-              hintText: 'Thank you for joining us.',
-              helperText: 'Shown alone when the stream ends.',
+          Tooltip(
+            message: shutdownTextController.text,
+            child: TextField(
+              key: const Key('shutdown-text'),
+              controller: shutdownTextController,
+              enabled:
+                  session.shutdownSplashEnabled &&
+                  !session.isLive &&
+                  !session.isBusy,
+              minLines: 2,
+              maxLines: 3,
+              onChanged: controller.updateShutdownText,
+              decoration: const InputDecoration(
+                labelText: 'Additional shutdown text',
+                hintText: 'Thank you for joining us.',
+                helperText: 'Shown alone when the stream ends.',
+              ),
             ),
           ),
           const SizedBox(height: 16),
@@ -628,13 +687,12 @@ class _SettingsPanel extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(
+                _OverflowTooltipText(
                   session.recordingDirectory.isEmpty
                       ? 'Default Videos folder'
                       : session.recordingDirectory,
                   key: const Key('recording-directory'),
                   maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
                 ),
                 const SizedBox(height: 10),
                 Row(
@@ -1059,9 +1117,8 @@ class _CameraFeed extends StatelessWidget {
                             fontWeight: FontWeight.w700,
                           ),
                         ),
-                        Text(
+                        _OverflowTooltipText(
                           source.description.name,
-                          overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
                             color: Colors.black87,
                             fontSize: 12,
@@ -1246,9 +1303,8 @@ class _AudioInput extends StatelessWidget {
                     'Input $number',
                     style: const TextStyle(fontWeight: FontWeight.w700),
                   ),
-                  Text(
+                  _OverflowTooltipText(
                     source.device.label,
-                    overflow: TextOverflow.ellipsis,
                     style: const TextStyle(fontSize: 12, color: Colors.black54),
                   ),
                 ],
@@ -1261,10 +1317,9 @@ class _AudioInput extends StatelessWidget {
         _LevelMeter(level: source.enabled ? source.level : 0),
         if (source.error != null) ...[
           const SizedBox(height: 8),
-          Text(
+          _OverflowTooltipText(
             source.error!,
             maxLines: 2,
-            overflow: TextOverflow.ellipsis,
             style: const TextStyle(fontSize: 11, color: Colors.black),
           ),
         ],
@@ -1371,12 +1426,57 @@ class _SettingRow extends StatelessWidget {
   final String value;
   @override
   Widget build(BuildContext context) => Row(
+    crossAxisAlignment: CrossAxisAlignment.start,
     children: [
-      Icon(icon, size: 20, color: kAccentBlue),
+      Padding(
+        padding: const EdgeInsets.only(top: 2),
+        child: Icon(icon, size: 20, color: kAccentBlue),
+      ),
       const SizedBox(width: 10),
-      Expanded(child: Text(label)),
-      Text(value, style: const TextStyle(fontWeight: FontWeight.w600)),
+      Expanded(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _OverflowTooltipText(
+              label,
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 2),
+            _OverflowTooltipText(
+              value,
+              maxLines: 2,
+              style: const TextStyle(fontSize: 12, color: Colors.black54),
+            ),
+          ],
+        ),
+      ),
     ],
+  );
+}
+
+/// Keeps compact desktop layouts tidy while exposing the complete value on
+/// hover (or a long press on touch devices).
+class _OverflowTooltipText extends StatelessWidget {
+  const _OverflowTooltipText(
+    this.text, {
+    super.key,
+    this.style,
+    this.maxLines = 1,
+  });
+
+  final String text;
+  final TextStyle? style;
+  final int maxLines;
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+    message: text,
+    child: Text(
+      text,
+      maxLines: maxLines,
+      overflow: TextOverflow.ellipsis,
+      style: style,
+    ),
   );
 }
 
@@ -1437,28 +1537,25 @@ class _GoLiveBar extends StatelessWidget {
               builder: (context, _) => Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
+                  _OverflowTooltipText(
                     session.title.isEmpty ? 'Untitled service' : session.title,
-                    overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w700,
                     ),
                   ),
                   if (recordingEngine.trace.isNotEmpty)
-                    Text(
+                    _OverflowTooltipText(
                       _traceLabel(recordingEngine.trace.last),
                       key: const Key('recording-lifecycle'),
-                      overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                         fontSize: 12,
                         color: Colors.black54,
                       ),
                     ),
-                  Text(
+                  _OverflowTooltipText(
                     youtube.statusMessage,
                     key: const Key('youtube-lifecycle'),
-                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       fontSize: 12,
                       color: youtube.status == YouTubeConnectionStatus.error
