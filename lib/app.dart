@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
@@ -467,7 +468,23 @@ class _Header extends StatelessWidget {
         ],
       ),
       const Spacer(),
-      _StatusPill(label: 'System ready', color: kAccentLime),
+      Column(
+        children: [
+          TextButton(
+            onPressed: () {
+              SystemNavigator.pop();
+              exit(0);
+            },
+            style: ButtonStyle(
+              foregroundColor: WidgetStateProperty.all(kAccentBlue),
+              backgroundColor: WidgetStateProperty.all(Colors.black54),
+            ),
+            child: const Text('Quit'),
+          ),
+          SizedBox(height: 12.0),
+          const _StatusPill(label: 'System ready', color: kAccentLime),
+        ],
+      ),
     ],
   );
 }
