@@ -55,6 +55,8 @@ void main() {
       return http.Response('not found', 404);
     });
     final service = YouTubeLiveService(api: YouTubeApi(client));
+    final statuses = <YouTubeConnectionStatus>[];
+    service.addListener(() => statuses.add(service.status));
 
     final target = await service.prepareBroadcast(
       const StreamSession(
@@ -71,6 +73,12 @@ void main() {
     expect(broadcastBody['snippet']['title'], 'Sunday Worship');
     expect(broadcastBody['status']['privacyStatus'], 'unlisted');
     expect(requests.last.url.queryParameters['streamId'], 'stream-1');
+    expect(statuses, [
+      YouTubeConnectionStatus.creatingBroadcast,
+      YouTubeConnectionStatus.creatingStream,
+      YouTubeConnectionStatus.bindingBroadcast,
+      YouTubeConnectionStatus.broadcastReady,
+    ]);
   });
 }
 

@@ -14,6 +14,7 @@ import 'services/media_permission_service.dart';
 import 'services/stream_engine.dart';
 import 'services/stream_settings_store.dart';
 import 'services/youtube_live_service.dart';
+import 'services/youtube_provisioning_stream_engine.dart';
 
 const kAccentLime = Color(0xff00ff0f);
 const kAccentBlue = Color(0xff00aeff);
@@ -94,7 +95,10 @@ class _StartupGateState extends State<_StartupGate> {
     );
     final youtube = YouTubeLiveService();
     final controller = StreamController(
-      recordingEngine,
+      YouTubeProvisioningStreamEngine(
+        localRecording: recordingEngine,
+        youtube: youtube,
+      ),
       settingsStore: SharedPreferencesStreamSettingsStore(),
     );
     await Future.wait([
@@ -425,6 +429,7 @@ class _StreamDashboardState extends State<StreamDashboard> {
                   controller: widget.controller,
                   session: session,
                   recordingEngine: widget.recordingEngine,
+                  youtube: widget.youtube,
                 ),
               ],
             ),
@@ -698,13 +703,41 @@ class _YouTubeDestination extends StatelessWidget {
         youtube.channelTitle ?? 'YouTube',
         'Connected',
       ),
-      YouTubeConnectionStatus.preparingBroadcast => (
+      YouTubeConnectionStatus.creatingBroadcast => (
         youtube.channelTitle ?? 'YouTube',
         'Creating broadcast…',
+      ),
+      YouTubeConnectionStatus.creatingStream => (
+        youtube.channelTitle ?? 'YouTube',
+        'Creating ingest stream…',
+      ),
+      YouTubeConnectionStatus.bindingBroadcast => (
+        youtube.channelTitle ?? 'YouTube',
+        'Binding broadcast…',
       ),
       YouTubeConnectionStatus.broadcastReady => (
         youtube.channelTitle ?? 'YouTube',
         'Broadcast ready',
+      ),
+      YouTubeConnectionStatus.waitingForIngest => (
+        youtube.channelTitle ?? 'YouTube',
+        'Waiting for video',
+      ),
+      YouTubeConnectionStatus.ingestActive => (
+        youtube.channelTitle ?? 'YouTube',
+        'Video received',
+      ),
+      YouTubeConnectionStatus.transitioningLive => (
+        youtube.channelTitle ?? 'YouTube',
+        'Starting broadcast…',
+      ),
+      YouTubeConnectionStatus.live => (
+        youtube.channelTitle ?? 'YouTube',
+        'Live',
+      ),
+      YouTubeConnectionStatus.completing => (
+        youtube.channelTitle ?? 'YouTube',
+        'Ending broadcast…',
       ),
       YouTubeConnectionStatus.error => (
         'YouTube error',
@@ -1358,10 +1391,12 @@ class _GoLiveBar extends StatelessWidget {
     required this.controller,
     required this.session,
     required this.recordingEngine,
+    required this.youtube,
   });
   final StreamController controller;
   final StreamSession session;
   final LocalRecordingStreamEngine recordingEngine;
+  final YouTubeLiveService youtube;
 
   @override
   Widget build(BuildContext context) {
@@ -1371,90 +1406,108 @@ class _GoLiveBar extends StatelessWidget {
       StreamStatus.live => 'End stream',
       _ => 'Go live',
     };
-    return Row(
-      children: [
-        Expanded(
-          child: ListenableBuilder(
-            listenable: recordingEngine,
-            builder: (context, _) => Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  session.title.isEmpty ? 'Untitled service' : session.title,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                if (recordingEngine.trace.isNotEmpty)
+    return ListenableBuilder(
+      listenable: youtube,
+      builder: (context, _) => Row(
+        children: [
+          Expanded(
+            child: ListenableBuilder(
+              listenable: recordingEngine,
+              builder: (context, _) => Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
                   Text(
-                    _traceLabel(recordingEngine.trace.last),
-                    key: const Key('recording-lifecycle'),
+                    session.title.isEmpty ? 'Untitled service' : session.title,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 12, color: Colors.black54),
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
-                if (recordingEngine.ffmpegAvailability ==
-                    FfmpegAvailability.unavailable)
-                  Wrap(
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      const Text(
-                        'FFmpeg is required before you can go live.',
-                        key: Key('ffmpeg-missing'),
-                        style: TextStyle(fontSize: 12, color: Colors.red),
+                  if (recordingEngine.trace.isNotEmpty)
+                    Text(
+                      _traceLabel(recordingEngine.trace.last),
+                      key: const Key('recording-lifecycle'),
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Colors.black54,
                       ),
-                      TextButton(
-                        key: const Key('ffmpeg-download'),
-                        onPressed: () => launchUrl(
-                          Uri.parse('https://ffmpeg.org/download.html'),
+                    ),
+                  Text(
+                    youtube.statusMessage,
+                    key: const Key('youtube-lifecycle'),
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: youtube.status == YouTubeConnectionStatus.error
+                          ? Colors.red
+                          : Colors.black54,
+                    ),
+                  ),
+                  if (recordingEngine.ffmpegAvailability ==
+                      FfmpegAvailability.unavailable)
+                    Wrap(
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        const Text(
+                          'FFmpeg is required before you can go live.',
+                          key: Key('ffmpeg-missing'),
+                          style: TextStyle(fontSize: 12, color: Colors.red),
                         ),
-                        child: const Text('Get FFmpeg'),
-                      ),
-                    ],
-                  ),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(width: 20),
-        SizedBox(
-          width: 240,
-          child: FilledButton.icon(
-            key: const Key('go-live'),
-            onPressed:
-                session.isBusy ||
-                    (!session.isLive &&
-                        recordingEngine.ffmpegAvailability !=
-                            FfmpegAvailability.available)
-                ? null
-                : controller.toggleLive,
-            style: FilledButton.styleFrom(
-              minimumSize: const Size.fromHeight(56),
-              backgroundColor: session.isLive ? kAccentBlue : kAccentGreen,
-              textStyle: const TextStyle(
-                fontSize: 17,
-                fontWeight: FontWeight.w700,
+                        TextButton(
+                          key: const Key('ffmpeg-download'),
+                          onPressed: () => launchUrl(
+                            Uri.parse('https://ffmpeg.org/download.html'),
+                          ),
+                          child: const Text('Get FFmpeg'),
+                        ),
+                      ],
+                    ),
+                ],
               ),
             ),
-            icon: session.isBusy
-                ? const SizedBox(
-                    width: 19,
-                    height: 19,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: Colors.black,
-                    ),
-                  )
-                : Icon(
-                    session.isLive
-                        ? Icons.stop_rounded
-                        : Icons.podcasts_rounded,
-                  ),
-            label: Text(label),
           ),
-        ),
-      ],
+          const SizedBox(width: 20),
+          SizedBox(
+            width: 240,
+            child: FilledButton.icon(
+              key: const Key('go-live'),
+              onPressed:
+                  session.isBusy ||
+                      (!session.isLive &&
+                          (recordingEngine.ffmpegAvailability !=
+                                  FfmpegAvailability.available ||
+                              !youtube.isConnected))
+                  ? null
+                  : controller.toggleLive,
+              style: FilledButton.styleFrom(
+                minimumSize: const Size.fromHeight(56),
+                backgroundColor: session.isLive ? kAccentBlue : kAccentGreen,
+                textStyle: const TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              icon: session.isBusy
+                  ? const SizedBox(
+                      width: 19,
+                      height: 19,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.black,
+                      ),
+                    )
+                  : Icon(
+                      session.isLive
+                          ? Icons.stop_rounded
+                          : Icons.podcasts_rounded,
+                    ),
+              label: Text(label),
+            ),
+          ),
+        ],
+      ),
     );
   }
 

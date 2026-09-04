@@ -14,8 +14,15 @@ enum YouTubeConnectionStatus {
   disconnected,
   authorizing,
   connected,
-  preparingBroadcast,
+  creatingBroadcast,
+  creatingStream,
+  bindingBroadcast,
   broadcastReady,
+  waitingForIngest,
+  ingestActive,
+  transitioningLive,
+  live,
+  completing,
   error,
 }
 
@@ -59,6 +66,31 @@ class YouTubeLiveService extends ChangeNotifier {
   YouTubeLiveTarget? get target => _target;
   bool get hasCredentials => _credentialsFile != null;
   bool get isConnected => _api != null;
+  String get statusMessage => switch (_status) {
+    YouTubeConnectionStatus.checkingCredentials =>
+      'YouTube: checking credentials…',
+    YouTubeConnectionStatus.credentialsMissing =>
+      'YouTube: client_secrets.json is missing',
+    YouTubeConnectionStatus.disconnected => 'YouTube: not connected',
+    YouTubeConnectionStatus.authorizing =>
+      'YouTube: waiting for browser authorization…',
+    YouTubeConnectionStatus.connected =>
+      'YouTube: connected to ${_channelTitle ?? 'channel'}',
+    YouTubeConnectionStatus.creatingBroadcast => 'YouTube: creating broadcast…',
+    YouTubeConnectionStatus.creatingStream =>
+      'YouTube: creating ingest stream…',
+    YouTubeConnectionStatus.bindingBroadcast =>
+      'YouTube: binding broadcast to stream…',
+    YouTubeConnectionStatus.broadcastReady =>
+      'YouTube: broadcast created; media publisher not started',
+    YouTubeConnectionStatus.waitingForIngest =>
+      'YouTube: waiting for incoming video…',
+    YouTubeConnectionStatus.ingestActive => 'YouTube: incoming video detected',
+    YouTubeConnectionStatus.transitioningLive => 'YouTube: starting broadcast…',
+    YouTubeConnectionStatus.live => 'YouTube: live',
+    YouTubeConnectionStatus.completing => 'YouTube: ending broadcast…',
+    YouTubeConnectionStatus.error => 'YouTube: ${_error ?? 'unknown error'}',
+  };
 
   Future<void> initialize() async {
     _credentialsFile =
@@ -112,7 +144,7 @@ class YouTubeLiveService extends ChangeNotifier {
   Future<YouTubeLiveTarget> prepareBroadcast(StreamSession session) async {
     final api = _api;
     if (api == null) throw StateError('Connect a YouTube channel first.');
-    _setStatus(YouTubeConnectionStatus.preparingBroadcast);
+    _setStatus(YouTubeConnectionStatus.creatingBroadcast);
     try {
       final broadcast = await api.liveBroadcasts.insert(
         LiveBroadcast(
@@ -133,6 +165,7 @@ class YouTubeLiveService extends ChangeNotifier {
         ),
         ['snippet', 'status', 'contentDetails'],
       );
+      _setStatus(YouTubeConnectionStatus.creatingStream);
       final stream = await api.liveStreams.insert(
         LiveStream(
           snippet: LiveStreamSnippet(title: session.title),
@@ -156,6 +189,7 @@ class YouTubeLiveService extends ChangeNotifier {
           streamName == null) {
         throw StateError('YouTube did not return complete ingest settings.');
       }
+      _setStatus(YouTubeConnectionStatus.bindingBroadcast);
       await api.liveBroadcasts.bind(broadcastId, [
         'id',
         'contentDetails',
