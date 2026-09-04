@@ -39,6 +39,11 @@ Run checks with `flutter analyze` and `flutter test`.
 5. Restart Church Streamer and select **Connect YouTube**. Authorization opens
    in the system browser and returns through a temporary localhost callback.
 
+After the first successful authorization, the refresh credentials are kept in
+the operating system's secure credential store. Church Streamer attempts to
+reconnect and validate that same channel on every startup. If Google revokes
+the authorization, the app returns to the Connect YouTube state.
+
 Use `client_secrets.example.json` as a shape reference only. Never commit the
 downloaded credentials or expose the RTMP ingestion URL, which contains the
 channel's stream key.

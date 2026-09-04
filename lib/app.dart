@@ -695,6 +695,10 @@ class _YouTubeDestination extends StatelessWidget {
         'Add client_secrets.json to the project folder.',
       ),
       YouTubeConnectionStatus.disconnected => ('YouTube', 'Ready to connect'),
+      YouTubeConnectionStatus.reconnecting => (
+        'YouTube',
+        'Reconnecting last channel…',
+      ),
       YouTubeConnectionStatus.authorizing => (
         'YouTube',
         'Complete sign-in in your browser…',

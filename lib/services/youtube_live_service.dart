@@ -2,16 +2,42 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:googleapis/youtube/v3.dart';
 import 'package:googleapis_auth/auth_io.dart';
+import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 
 import '../domain/stream_session.dart';
+
+abstract interface class YouTubeCredentialStore {
+  Future<String?> read();
+  Future<void> write(String value);
+  Future<void> delete();
+}
+
+class SecureYouTubeCredentialStore implements YouTubeCredentialStore {
+  const SecureYouTubeCredentialStore();
+  static const _key = 'youtube.oauth.accessCredentials';
+  static const _storage = FlutterSecureStorage(
+    mOptions: MacOsOptions(usesDataProtectionKeychain: false),
+  );
+
+  @override
+  Future<String?> read() => _storage.read(key: _key);
+
+  @override
+  Future<void> write(String value) => _storage.write(key: _key, value: value);
+
+  @override
+  Future<void> delete() => _storage.delete(key: _key);
+}
 
 enum YouTubeConnectionStatus {
   checkingCredentials,
   credentialsMissing,
   disconnected,
+  reconnecting,
   authorizing,
   connected,
   creatingBroadcast,
@@ -43,15 +69,24 @@ class YouTubeLiveTarget {
 }
 
 class YouTubeLiveService extends ChangeNotifier {
-  YouTubeLiveService({File? credentialsFile, YouTubeApi? api})
-    : _configuredCredentialsFile = credentialsFile,
-      _api = api,
-      _status = api == null
-          ? YouTubeConnectionStatus.checkingCredentials
-          : YouTubeConnectionStatus.connected;
+  YouTubeLiveService({
+    File? credentialsFile,
+    YouTubeApi? api,
+    YouTubeCredentialStore? credentialStore,
+    http.Client Function()? httpClientFactory,
+  }) : _configuredCredentialsFile = credentialsFile,
+       _credentialStore =
+           credentialStore ?? const SecureYouTubeCredentialStore(),
+       _httpClientFactory = httpClientFactory ?? http.Client.new,
+       _api = api,
+       _status = api == null
+           ? YouTubeConnectionStatus.checkingCredentials
+           : YouTubeConnectionStatus.connected;
 
   static const credentialsFileName = 'client_secrets.json';
   final File? _configuredCredentialsFile;
+  final YouTubeCredentialStore _credentialStore;
+  final http.Client Function() _httpClientFactory;
   File? _credentialsFile;
   AutoRefreshingAuthClient? _client;
   YouTubeApi? _api;
@@ -72,6 +107,8 @@ class YouTubeLiveService extends ChangeNotifier {
     YouTubeConnectionStatus.credentialsMissing =>
       'YouTube: client_secrets.json is missing',
     YouTubeConnectionStatus.disconnected => 'YouTube: not connected',
+    YouTubeConnectionStatus.reconnecting =>
+      'YouTube: reconnecting last channel…',
     YouTubeConnectionStatus.authorizing =>
       'YouTube: waiting for browser authorization…',
     YouTubeConnectionStatus.connected =>
@@ -95,11 +132,13 @@ class YouTubeLiveService extends ChangeNotifier {
   Future<void> initialize() async {
     _credentialsFile =
         _configuredCredentialsFile ?? await _findCredentialsFile();
-    _setStatus(
-      _credentialsFile == null
-          ? YouTubeConnectionStatus.credentialsMissing
-          : YouTubeConnectionStatus.disconnected,
-    );
+    final file = _credentialsFile;
+    if (file == null) {
+      _setStatus(YouTubeConnectionStatus.credentialsMissing);
+      return;
+    }
+    _setStatus(YouTubeConnectionStatus.disconnected);
+    await _reconnect(file);
   }
 
   Future<void> connect() async {
@@ -126,18 +165,59 @@ class YouTubeLiveService extends ChangeNotifier {
           }
         },
       );
-      final api = YouTubeApi(_client!);
-      final channels = await api.channels.list(['snippet'], mine: true);
-      if (channels.items == null || channels.items!.isEmpty) {
-        throw StateError('This Google account has no YouTube channel.');
-      }
-      _api = api;
-      _channelTitle = channels.items!.first.snippet?.title ?? 'YouTube channel';
-      _setStatus(YouTubeConnectionStatus.connected);
+      await _credentialStore.write(jsonEncode(_client!.credentials.toJson()));
+      _persistCredentialUpdates(_client!);
+      await _validateClient(_client!);
     } catch (error) {
       await disconnect();
       _setError(_friendlyError(error));
     }
+  }
+
+  Future<void> _reconnect(File file) async {
+    final stored = await _credentialStore.read();
+    if (stored == null) return;
+    _setStatus(YouTubeConnectionStatus.reconnecting);
+    try {
+      final clientId = await _readClientId(file);
+      final decoded = jsonDecode(stored);
+      if (decoded is! Map<String, dynamic>) {
+        throw const FormatException('Saved authorization is invalid.');
+      }
+      final client = autoRefreshingClient(
+        clientId,
+        AccessCredentials.fromJson(decoded),
+        _httpClientFactory(),
+      );
+      _client = client;
+      _persistCredentialUpdates(client);
+      await _validateClient(client);
+      await _credentialStore.write(jsonEncode(client.credentials.toJson()));
+    } catch (_) {
+      _client?.close();
+      _client = null;
+      _api = null;
+      _channelTitle = null;
+      await _credentialStore.delete();
+      _setStatus(YouTubeConnectionStatus.disconnected);
+    }
+  }
+
+  Future<void> _validateClient(AutoRefreshingAuthClient client) async {
+    final api = YouTubeApi(client);
+    final channels = await api.channels.list(['snippet'], mine: true);
+    if (channels.items == null || channels.items!.isEmpty) {
+      throw StateError('This Google account has no YouTube channel.');
+    }
+    _api = api;
+    _channelTitle = channels.items!.first.snippet?.title ?? 'YouTube channel';
+    _setStatus(YouTubeConnectionStatus.connected);
+  }
+
+  void _persistCredentialUpdates(AutoRefreshingAuthClient client) {
+    client.credentialUpdates.listen((credentials) {
+      _credentialStore.write(jsonEncode(credentials.toJson()));
+    });
   }
 
   /// Creates and binds the YouTube resources required by an RTMP publisher.
@@ -213,6 +293,7 @@ class YouTubeLiveService extends ChangeNotifier {
     _api = null;
     _channelTitle = null;
     _target = null;
+    await _credentialStore.delete();
     if (_status != YouTubeConnectionStatus.error) {
       _setStatus(
         hasCredentials
