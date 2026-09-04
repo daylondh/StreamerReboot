@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -74,6 +75,8 @@ class YouTubeLiveService extends ChangeNotifier {
     YouTubeApi? api,
     YouTubeCredentialStore? credentialStore,
     http.Client Function()? httpClientFactory,
+    this.ingestPollInterval = const Duration(seconds: 2),
+    this.ingestTimeout = const Duration(seconds: 45),
   }) : _configuredCredentialsFile = credentialsFile,
        _credentialStore =
            credentialStore ?? const SecureYouTubeCredentialStore(),
@@ -87,6 +90,8 @@ class YouTubeLiveService extends ChangeNotifier {
   final File? _configuredCredentialsFile;
   final YouTubeCredentialStore _credentialStore;
   final http.Client Function() _httpClientFactory;
+  final Duration ingestPollInterval;
+  final Duration ingestTimeout;
   File? _credentialsFile;
   AutoRefreshingAuthClient? _client;
   YouTubeApi? _api;
@@ -96,6 +101,7 @@ class YouTubeLiveService extends ChangeNotifier {
   YouTubeLiveTarget? _target;
   String? _broadcastId;
   String? _streamId;
+  int _startGeneration = 0;
 
   YouTubeConnectionStatus get status => _status;
   String? get channelTitle => _channelTitle;
@@ -232,7 +238,14 @@ class YouTubeLiveService extends ChangeNotifier {
 
   void _persistCredentialUpdates(AutoRefreshingAuthClient client) {
     client.credentialUpdates.listen((credentials) {
-      _credentialStore.write(jsonEncode(credentials.toJson()));
+      unawaited(
+        _credentialStore.write(jsonEncode(credentials.toJson())).catchError((
+          Object error,
+          StackTrace stackTrace,
+        ) {
+          debugPrint('Could not persist refreshed YouTube credentials: $error');
+        }),
+      );
     });
   }
 
@@ -253,8 +266,8 @@ class YouTubeLiveService extends ChangeNotifier {
             selfDeclaredMadeForKids: false,
           ),
           contentDetails: LiveBroadcastContentDetails(
-            enableAutoStart: true,
-            enableAutoStop: true,
+            enableAutoStart: false,
+            enableAutoStop: false,
             enableDvr: true,
             recordFromStart: true,
           ),
@@ -295,7 +308,9 @@ class YouTubeLiveService extends ChangeNotifier {
       _target = YouTubeLiveTarget(
         broadcastId: broadcastId,
         streamId: streamId,
-        ingestionUrl: '${address.replaceFirst(RegExp(r'/+$'), '')}/$streamName',
+        ingestionUrl:
+            '${_withExplicitRtmpsPort(address).replaceFirst(RegExp(r'/+$'), '')}'
+            '/$streamName',
       );
       _setStatus(YouTubeConnectionStatus.broadcastReady);
       return _target!;
@@ -305,9 +320,68 @@ class YouTubeLiveService extends ChangeNotifier {
     }
   }
 
+  /// Waits until YouTube confirms receipt of encoded media, then explicitly
+  /// transitions the bound broadcast to live.
+  Future<void> startBroadcast() async {
+    final api = _api;
+    final target = _target;
+    if (api == null || target == null) {
+      throw StateError('The YouTube broadcast is not ready.');
+    }
+
+    final generation = ++_startGeneration;
+    _setStatus(YouTubeConnectionStatus.waitingForIngest);
+    final stopwatch = Stopwatch()..start();
+    try {
+      while (stopwatch.elapsed < ingestTimeout) {
+        if (generation != _startGeneration) {
+          throw StateError('YouTube live transition was cancelled.');
+        }
+        final response = await api.liveStreams.list(
+          ['status'],
+          id: [target.streamId],
+        );
+        final streamStatus = response.items?.firstOrNull?.status;
+        if (streamStatus?.streamStatus == 'active') {
+          _setStatus(YouTubeConnectionStatus.ingestActive);
+          _setStatus(YouTubeConnectionStatus.transitioningLive);
+          await api.liveBroadcasts.transition('live', target.broadcastId, [
+            'id',
+            'status',
+          ]);
+          _setStatus(YouTubeConnectionStatus.live);
+          return;
+        }
+        if (streamStatus?.streamStatus == 'error') {
+          final health = streamStatus?.healthStatus?.status;
+          throw StateError(
+            health == null
+                ? 'YouTube rejected the incoming media.'
+                : 'YouTube ingest health is $health.',
+          );
+        }
+        await Future<void>.delayed(ingestPollInterval);
+      }
+      throw TimeoutException(
+        'YouTube did not detect incoming video within '
+        '${ingestTimeout.inSeconds} seconds.',
+      );
+    } catch (error) {
+      if (generation == _startGeneration) {
+        _setError(_friendlyError(error));
+      }
+      rethrow;
+    }
+  }
+
+  void cancelPendingStart() => _startGeneration++;
+
+  void reportPublisherError(Object error) => _setError(_friendlyError(error));
+
   /// Completes an active broadcast without deleting its YouTube resources.
   /// This is intentionally safe to call more than once.
   Future<void> finishBroadcast() async {
+    cancelPendingStart();
     final api = _api;
     final broadcastId = _broadcastId;
     if (api == null || (broadcastId == null && _streamId == null)) return;
@@ -383,6 +457,14 @@ class YouTubeLiveService extends ChangeNotifier {
       throw const FormatException('Credentials are missing client_id.');
     }
     return ClientId(identifier, secret is String ? secret : null);
+  }
+
+  static String _withExplicitRtmpsPort(String address) {
+    final uri = Uri.parse(address);
+    if (uri.scheme == 'rtmps' && !uri.hasPort) {
+      return uri.replace(port: 443).toString();
+    }
+    return address;
   }
 
   static Future<File?> _findCredentialsFile() async {

@@ -69,10 +69,15 @@ class CameraSourcesController extends ChangeNotifier {
   }
 
   Future<void> _disposeSources() async {
-    for (final source in _sources) {
+    // Detach previews before disposing their controllers. CameraController
+    // notifies listeners during disposal, and a still-mounted CameraPreview
+    // would otherwise try to render the already-disposed controller.
+    final sources = List<CameraSource>.of(_sources);
+    _sources.clear();
+    notifyListeners();
+    for (final source in sources) {
       await source.controller?.dispose();
     }
-    _sources.clear();
   }
 
   Future<void> release() async {

@@ -90,17 +90,32 @@ class AudioSourcesController extends ChangeNotifier {
           noiseSuppress: false,
         ),
       );
-      source.dataSubscription = data.listen((chunk) {
-        source.mixedAudio.add(_applyGain(chunk, source.gain));
-      });
+      source.dataSubscription = data.listen(
+        (chunk) {
+          source.mixedAudio.add(_applyGain(chunk, source.gain));
+        },
+        onError: (Object error, StackTrace stackTrace) {
+          source.error = error.toString();
+          source.enabled = false;
+          source.level = 0;
+          notifyListeners();
+        },
+      );
       source.amplitudeSubscription = source.recorder
           .onAmplitudeChanged(const Duration(milliseconds: 100))
-          .listen((amplitude) {
-            // Convert dBFS to a 0–1 linear meter, then apply the software gain
-            // that will also feed the eventual stream mixer.
-            source.level = meterLevel(amplitude.current, source.gain);
-            notifyListeners();
-          });
+          .listen(
+            (amplitude) {
+              // Convert dBFS to a 0–1 linear meter, then apply the software gain
+              // that will also feed the eventual stream mixer.
+              source.level = meterLevel(amplitude.current, source.gain);
+              notifyListeners();
+            },
+            onError: (Object error, StackTrace stackTrace) {
+              source.error = error.toString();
+              source.level = 0;
+              notifyListeners();
+            },
+          );
     } catch (error) {
       source.error = error.toString();
       source.enabled = false;
@@ -155,7 +170,14 @@ class AudioSourcesController extends ChangeNotifier {
   @override
   void dispose() {
     for (final source in _sources) {
-      unawaited(_disposeSource(source));
+      unawaited(
+        _disposeSource(source).catchError((
+          Object error,
+          StackTrace stackTrace,
+        ) {
+          debugPrint('Audio input teardown failed: $error');
+        }),
+      );
     }
     super.dispose();
   }

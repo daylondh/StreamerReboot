@@ -18,9 +18,10 @@ This first slice runs on Windows, macOS, and Linux and includes:
 - a tested stream-session state machine; and
 - a `StreamEngine` boundary ready for native capture.
 
-Local recording is functional. YouTube authorization and live-event
-provisioning are implemented; the FFmpeg RTMP media publisher is the next
-transport milestone, so **Go live does not publish video yet**.
+Local recording, YouTube authorization, live-event provisioning, and FFmpeg
+RTMP publishing are implemented. During a live session, FFmpeg sends the camera
+program and mixed enabled microphone inputs to YouTube while writing the same
+program to a local MP4 archive.
 
 ## Run it
 

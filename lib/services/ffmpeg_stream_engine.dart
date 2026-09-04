@@ -1,0 +1,517 @@
+import 'dart:async';
+import 'dart:collection';
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart';
+import 'package:path_provider/path_provider.dart';
+
+import '../controllers/audio_sources_controller.dart';
+import '../domain/stream_session.dart';
+import 'stream_engine.dart';
+
+typedef CameraControllerResolver = CameraController? Function(String name);
+typedef IngestionUrlResolver = String? Function();
+typedef FfmpegProcessStarter = Future<Process> Function(List<String> arguments);
+
+/// Publishes camera and microphone data to YouTube while writing the same
+/// encoded program to a local MP4 archive.
+class FfmpegStreamEngine extends ChangeNotifier
+    implements StreamEngine, StreamProcessMonitor {
+  FfmpegStreamEngine({
+    required this.cameraForName,
+    required this.audioSources,
+    required this.ingestionUrl,
+    Future<Directory> Function()? defaultDirectory,
+    FfmpegProcessStarter? processStarter,
+    Future<bool> Function()? ffmpegChecker,
+  }) : _defaultDirectory = defaultDirectory ?? getApplicationDocumentsDirectory,
+       _processStarter = processStarter ?? _startFfmpeg,
+       _ffmpegChecker = ffmpegChecker ?? _isFfmpegInstalled;
+
+  final CameraControllerResolver cameraForName;
+  final AudioSourcesController audioSources;
+  final IngestionUrlResolver ingestionUrl;
+  final Future<Directory> Function() _defaultDirectory;
+  final FfmpegProcessStarter _processStarter;
+  final Future<bool> Function() _ffmpegChecker;
+
+  final List<RecordingLifecycleEvent> _trace = [];
+  final List<String> _recordedFiles = [];
+  final List<String> _stderr = [];
+  final List<StreamSubscription<Uint8List>> _audioSubscriptions = [];
+  final Map<AudioSource, _PcmQueue> _audioQueues = {};
+
+  FfmpegAvailability _ffmpegAvailability = FfmpegAvailability.checking;
+  Process? _process;
+  CameraController? _camera;
+  Socket? _videoSocket;
+  Socket? _audioSocket;
+  ServerSocket? _videoServer;
+  ServerSocket? _audioServer;
+  Timer? _audioTimer;
+  StreamSubscription<String>? _stderrSubscription;
+  int? _frameWidth;
+  int? _frameHeight;
+  String? _pixelFormat;
+  String? _outputPath;
+  String? _sensitiveIngestionUrl;
+  Object? _transportError;
+  bool _stopping = false;
+
+  List<RecordingLifecycleEvent> get trace => List.unmodifiable(_trace);
+  List<String> get recordedFiles => List.unmodifiable(_recordedFiles);
+  bool get isRecording => _process != null;
+  FfmpegAvailability get ffmpegAvailability => _ffmpegAvailability;
+  @override
+  Future<int> get processExitCode {
+    final process = _process;
+    if (process == null) throw StateError('FFmpeg is not running.');
+    return process.exitCode;
+  }
+
+  @override
+  String get diagnosticSummary =>
+      _ffmpegFailure('FFmpeg stopped before YouTube detected incoming video.');
+
+  Future<void> checkFfmpegAvailability() async {
+    _ffmpegAvailability = FfmpegAvailability.checking;
+    notifyListeners();
+    _ffmpegAvailability = await _ffmpegChecker()
+        ? FfmpegAvailability.available
+        : FfmpegAvailability.unavailable;
+    notifyListeners();
+  }
+
+  @override
+  Future<void> start(StreamSession session) async {
+    if (_process != null) throw StateError('FFmpeg is already publishing.');
+    final cameraName = session.cameraName;
+    final target = ingestionUrl();
+    if (cameraName == null) throw StateError('Select a camera first.');
+    if (target == null) throw StateError('YouTube ingest is not ready.');
+    final camera = cameraForName(cameraName);
+    if (camera == null || !camera.value.isInitialized) {
+      throw StateError('Camera "$cameraName" is not ready.');
+    }
+
+    _trace.clear();
+    _recordedFiles.clear();
+    _stderr.clear();
+    _transportError = null;
+    _addEvent(RecordingLifecycleStage.starting, cameraName);
+    try {
+      final firstFrame = Completer<CameraImage>();
+      _camera = camera;
+      await camera.startImageStream((frame) {
+        if (!firstFrame.isCompleted) firstFrame.complete(frame);
+        _writeVideoFrame(frame);
+      });
+      final frame = await firstFrame.future.timeout(const Duration(seconds: 5));
+      _frameWidth = frame.width;
+      _frameHeight = frame.height;
+      _pixelFormat = _ffmpegPixelFormat(frame);
+
+      _videoServer = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      _audioServer = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      final videoConnection = _videoServer!.first;
+      final audioConnection = _audioServer!.first;
+      _outputPath = await _createOutputPath(session);
+      _sensitiveIngestionUrl = target;
+      final arguments = buildArguments(
+        videoPort: _videoServer!.port,
+        audioPort: _audioServer!.port,
+        width: frame.width,
+        height: frame.height,
+        pixelFormat: _pixelFormat!,
+        videoEncoder: _defaultVideoEncoder,
+        ingestionUrl: target,
+        outputPath: _outputPath!,
+      );
+      final process = await _processStarter(arguments);
+      _process = process;
+      _stderrSubscription = process.stderr
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .listen((line) {
+            _stderr.add(_sanitizeDiagnostic(line));
+            if (_stderr.length > 30) _stderr.removeAt(0);
+          });
+      _videoSocket = await videoConnection.timeout(const Duration(seconds: 5));
+      _audioSocket = await audioConnection.timeout(const Duration(seconds: 5));
+      _consumeSocketErrors(_videoSocket!, 'video');
+      _consumeSocketErrors(_audioSocket!, 'audio');
+      await _videoServer?.close();
+      await _audioServer?.close();
+      _videoServer = null;
+      _audioServer = null;
+      _startAudioMixer();
+
+      final earlyExit = await Future.any<Object?>([
+        process.exitCode,
+        Future<void>.delayed(const Duration(milliseconds: 500)),
+      ]);
+      if (earlyExit is int) {
+        throw StateError(_ffmpegFailure('FFmpeg exited with code $earlyExit.'));
+      }
+      _addEvent(RecordingLifecycleStage.recording, cameraName);
+    } catch (_) {
+      await _tearDownMedia(killProcess: true);
+      rethrow;
+    }
+  }
+
+  @override
+  Future<void> switchCamera(String cameraName) async {
+    final next = cameraForName(cameraName);
+    if (next == null || !next.value.isInitialized) {
+      throw StateError('Camera "$cameraName" is not ready.');
+    }
+    final previous = _camera;
+    if (previous == null) throw StateError('No stream is active.');
+    _addEvent(RecordingLifecycleStage.switchingCamera, cameraName);
+    await previous.stopImageStream();
+    _camera = next;
+    try {
+      await next.startImageStream((frame) {
+        if (frame.width != _frameWidth || frame.height != _frameHeight) return;
+        _writeVideoFrame(frame);
+      });
+    } catch (_) {
+      _camera = previous;
+      await previous.startImageStream(_writeVideoFrame);
+      rethrow;
+    }
+    _addEvent(RecordingLifecycleStage.recording, cameraName);
+  }
+
+  @override
+  Future<void> stop(StreamSession session) async {
+    if (_stopping) return;
+    final process = _process;
+    if (process == null) {
+      await _tearDownMedia(killProcess: false);
+      return;
+    }
+    _stopping = true;
+    _addEvent(RecordingLifecycleStage.stopping, session.shutdownText);
+    try {
+      _addEvent(RecordingLifecycleStage.finalizing, 'FFmpeg outputs');
+      process.stdin.writeln('q');
+      await process.stdin.flush();
+      int exitCode;
+      try {
+        exitCode = await process.exitCode.timeout(const Duration(seconds: 20));
+      } on TimeoutException {
+        process.kill();
+        throw StateError('FFmpeg did not stop within 20 seconds.');
+      }
+      if (exitCode != 0) {
+        throw StateError(_ffmpegFailure('FFmpeg exited with code $exitCode.'));
+      }
+      final outputPath = _outputPath;
+      if (outputPath != null && await File(outputPath).exists()) {
+        _recordedFiles.add(outputPath);
+        _addEvent(RecordingLifecycleStage.recordingSaved, outputPath);
+      }
+      _addEvent(RecordingLifecycleStage.stopped, 'Stream finalized');
+    } finally {
+      await _tearDownMedia(killProcess: true);
+      _stopping = false;
+    }
+  }
+
+  @visibleForTesting
+  static List<String> buildArguments({
+    required int videoPort,
+    required int audioPort,
+    required int width,
+    required int height,
+    required String pixelFormat,
+    required String videoEncoder,
+    required String ingestionUrl,
+    required String outputPath,
+  }) => [
+    '-hide_banner',
+    '-loglevel',
+    'warning',
+    '-f',
+    'rawvideo',
+    '-pixel_format',
+    pixelFormat,
+    '-video_size',
+    '${width}x$height',
+    '-framerate',
+    '30',
+    '-i',
+    'tcp://127.0.0.1:$videoPort',
+    '-f',
+    's16le',
+    '-ar',
+    '48000',
+    '-ac',
+    '1',
+    '-i',
+    'tcp://127.0.0.1:$audioPort',
+    '-map',
+    '0:v:0',
+    '-map',
+    '1:a:0',
+    '-c:v',
+    videoEncoder,
+    if (videoEncoder == 'h264_videotoolbox') ...[
+      '-realtime',
+      '1',
+      '-allow_sw',
+      '1',
+    ],
+    '-b:v',
+    '4500k',
+    '-maxrate',
+    '4500k',
+    '-bufsize',
+    '9000k',
+    '-g',
+    '60',
+    '-keyint_min',
+    '60',
+    '-pix_fmt',
+    'yuv420p',
+    '-c:a',
+    'aac',
+    '-b:a',
+    '128k',
+    '-ar',
+    '48000',
+    '-ac',
+    '2',
+    '-f',
+    'tee',
+    '[f=flv:flvflags=no_duration_filesize:onfail=abort]$ingestionUrl|'
+        '[f=mp4:movflags=+faststart:onfail=ignore]$outputPath',
+  ];
+
+  void _writeVideoFrame(CameraImage frame) {
+    final socket = _videoSocket;
+    if (socket == null || frame.planes.isEmpty) return;
+    if (frame.width != _frameWidth || frame.height != _frameHeight) return;
+    final plane = frame.planes.first;
+    final rowBytes = frame.width * 4;
+    try {
+      if (plane.bytesPerRow == rowBytes) {
+        socket.add(plane.bytes);
+        return;
+      }
+      final packed = Uint8List(rowBytes * frame.height);
+      for (var row = 0; row < frame.height; row++) {
+        packed.setRange(
+          row * rowBytes,
+          (row + 1) * rowBytes,
+          plane.bytes,
+          row * plane.bytesPerRow,
+        );
+      }
+      socket.add(packed);
+    } catch (error) {
+      _recordTransportError('video', error);
+    }
+  }
+
+  void _startAudioMixer() {
+    for (final source in audioSources.sources) {
+      final queue = _PcmQueue();
+      _audioQueues[source] = queue;
+      _audioSubscriptions.add(source.mixedAudio.stream.listen(queue.add));
+    }
+    // 20 ms of 48 kHz mono signed 16-bit PCM.
+    const byteCount = 1920;
+    _audioTimer = Timer.periodic(const Duration(milliseconds: 20), (_) {
+      final socket = _audioSocket;
+      if (socket == null) return;
+      final enabled = audioSources.sources
+          .where((source) => source.enabled)
+          .toList();
+      if (enabled.isEmpty) {
+        _writeAudio(socket, Uint8List(byteCount));
+        return;
+      }
+      final chunks = [
+        for (final source in enabled) _audioQueues[source]!.take(byteCount),
+      ];
+      final output = Uint8List(byteCount);
+      final outputData = ByteData.sublistView(output);
+      for (var offset = 0; offset < byteCount; offset += 2) {
+        var mixed = 0;
+        for (final chunk in chunks) {
+          mixed += ByteData.sublistView(chunk).getInt16(offset, Endian.little);
+        }
+        outputData.setInt16(offset, mixed.clamp(-32768, 32767), Endian.little);
+      }
+      _writeAudio(socket, output);
+    });
+  }
+
+  void _writeAudio(Socket socket, Uint8List bytes) {
+    try {
+      socket.add(bytes);
+    } catch (error) {
+      _recordTransportError('audio', error);
+    }
+  }
+
+  void _consumeSocketErrors(Socket socket, String channel) {
+    socket.listen(
+      (_) {},
+      onError: (Object error, StackTrace stackTrace) {
+        _recordTransportError(channel, error);
+      },
+    );
+  }
+
+  void _recordTransportError(String channel, Object error) {
+    _transportError ??= error;
+    final message = _sanitizeDiagnostic('$channel transport: $error');
+    _stderr.add(message);
+    if (_stderr.length > 30) _stderr.removeAt(0);
+  }
+
+  Future<void> _tearDownMedia({required bool killProcess}) async {
+    _audioTimer?.cancel();
+    _audioTimer = null;
+    for (final subscription in _audioSubscriptions) {
+      await subscription.cancel();
+    }
+    _audioSubscriptions.clear();
+    _audioQueues.clear();
+    final camera = _camera;
+    _camera = null;
+    if (camera?.value.isStreamingImages ?? false) {
+      await camera!.stopImageStream();
+    }
+    await _videoSocket?.close();
+    await _audioSocket?.close();
+    await _videoServer?.close();
+    await _audioServer?.close();
+    _videoSocket = null;
+    _audioSocket = null;
+    _videoServer = null;
+    _audioServer = null;
+    if (killProcess) _process?.kill();
+    await _stderrSubscription?.cancel();
+    _stderrSubscription = null;
+    _process = null;
+    _frameWidth = null;
+    _frameHeight = null;
+    _pixelFormat = null;
+    _outputPath = null;
+    _sensitiveIngestionUrl = null;
+    _transportError = null;
+  }
+
+  Future<String> _createOutputPath(StreamSession session) async {
+    final directory = session.recordingDirectory.isEmpty
+        ? await _defaultDirectory()
+        : Directory(session.recordingDirectory);
+    await directory.create(recursive: true);
+    final timestamp = DateTime.now().toIso8601String().replaceAll(':', '-');
+    final title = session.title
+        .trim()
+        .replaceAll(RegExp(r'[\/:*?"<>|]'), '-')
+        .replaceAll(RegExp(r'\s+'), ' ');
+    return '${directory.path}${Platform.pathSeparator}'
+        '${title.isEmpty ? 'Church Stream' : title}-$timestamp.mp4';
+  }
+
+  String _ffmpegFailure(String fallback) => _stderr.isEmpty
+      ? fallback
+      : _stderr.reversed.firstWhere(
+          (line) => line.trim().isNotEmpty,
+          orElse: () => fallback,
+        );
+
+  String _sanitizeDiagnostic(String line) {
+    final target = _sensitiveIngestionUrl;
+    return target == null ? line : line.replaceAll(target, '[YouTube ingest]');
+  }
+
+  String _ffmpegPixelFormat(CameraImage frame) {
+    final raw = frame.format.raw.toString().toLowerCase();
+    if (raw.contains('rgba')) return 'rgba';
+    if (raw.contains('bgra')) return 'bgra';
+    throw StateError('Unsupported camera pixel format: ${frame.format.raw}');
+  }
+
+  void _addEvent(RecordingLifecycleStage stage, String detail) {
+    _trace.add(RecordingLifecycleEvent(stage, detail, DateTime.now()));
+    notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    // The normal Quit path awaits stop(); this is a final safety net for an
+    // operating-system window close or an unexpected widget teardown.
+    unawaited(
+      _tearDownMedia(killProcess: true).catchError((
+        Object error,
+        StackTrace stackTrace,
+      ) {
+        debugPrint('FFmpeg teardown failed: $error');
+      }),
+    );
+    super.dispose();
+  }
+
+  static Future<Process> _startFfmpeg(List<String> arguments) async {
+    for (final executable in _ffmpegCandidates) {
+      try {
+        return await Process.start(executable, arguments);
+      } on ProcessException {
+        // Try the next common installation location.
+      }
+    }
+    throw StateError('FFmpeg is not installed.');
+  }
+
+  static Future<bool> _isFfmpegInstalled() async {
+    for (final executable in _ffmpegCandidates) {
+      try {
+        if ((await Process.run(executable, ['-version'])).exitCode == 0) {
+          return true;
+        }
+      } on ProcessException {
+        // Try the next candidate.
+      }
+    }
+    return false;
+  }
+
+  static List<String> get _ffmpegCandidates => [
+    'ffmpeg',
+    if (Platform.isMacOS) ...[
+      '/usr/local/bin/ffmpeg',
+      '/opt/homebrew/bin/ffmpeg',
+      '/opt/local/bin/ffmpeg',
+    ],
+  ];
+
+  static String get _defaultVideoEncoder {
+    if (Platform.isMacOS) return 'h264_videotoolbox';
+    if (Platform.isWindows) return 'h264_mf';
+    return 'libx264';
+  }
+}
+
+class _PcmQueue {
+  final Queue<int> _bytes = Queue<int>();
+
+  void add(Uint8List bytes) => _bytes.addAll(bytes);
+
+  Uint8List take(int count) {
+    final output = Uint8List(count);
+    for (var index = 0; index < count && _bytes.isNotEmpty; index++) {
+      output[index] = _bytes.removeFirst();
+    }
+    return output;
+  }
+}

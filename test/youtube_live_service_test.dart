@@ -121,7 +121,12 @@ void main() {
       requests.add(request);
       if (request.url.path.endsWith('/liveBroadcasts/transition')) {
         return _jsonResponse(
-          '{"id":"broadcast-1","status":{"lifeCycleStatus":"complete"}}',
+          jsonEncode({
+            'id': 'broadcast-1',
+            'status': {
+              'lifeCycleStatus': request.url.queryParameters['broadcastStatus'],
+            },
+          }),
         );
       }
       if (request.url.path.endsWith('/liveBroadcasts/bind')) {
@@ -129,6 +134,13 @@ void main() {
       }
       if (request.url.path.endsWith('/liveBroadcasts')) {
         return _jsonResponse('{"id":"broadcast-1"}');
+      }
+      if (request.method == 'GET' &&
+          request.url.path.endsWith('/liveStreams')) {
+        return _jsonResponse(
+          '{"items":[{"id":"stream-1","status":{"streamStatus":"active",'
+          '"healthStatus":{"status":"good"}}}]}',
+        );
       }
       if (request.url.path.endsWith('/liveStreams')) {
         return _jsonResponse(
@@ -158,7 +170,10 @@ void main() {
 
     expect(target.broadcastId, 'broadcast-1');
     expect(target.streamId, 'stream-1');
-    expect(target.ingestionUrl, 'rtmps://a.rtmps.youtube.com/live2/secret-key');
+    expect(
+      target.ingestionUrl,
+      'rtmps://a.rtmps.youtube.com:443/live2/secret-key',
+    );
     expect(requests, hasLength(3));
     final broadcastBody = jsonDecode(requests.first.body);
     expect(broadcastBody['snippet']['title'], 'Sunday Worship');
@@ -170,6 +185,17 @@ void main() {
       YouTubeConnectionStatus.bindingBroadcast,
       YouTubeConnectionStatus.broadcastReady,
     ]);
+
+    await service.startBroadcast();
+    expect(service.status, YouTubeConnectionStatus.live);
+    expect(
+      requests.where(
+        (request) =>
+            request.url.path.endsWith('/liveBroadcasts/transition') &&
+            request.url.queryParameters['broadcastStatus'] == 'live',
+      ),
+      hasLength(1),
+    );
 
     await service.finishBroadcast();
     expect(requests.where((request) => request.method == 'DELETE'), isEmpty);

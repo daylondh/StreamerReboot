@@ -19,6 +19,29 @@ class YouTubeProvisioningStreamEngine implements StreamEngine {
     }
     await youtube.prepareBroadcast(session);
     await localRecording.start(session);
+    try {
+      if (localRecording case StreamProcessMonitor monitor) {
+        final outcome = await Future.any<Object?>([
+          youtube.startBroadcast(),
+          monitor.processExitCode.then<Object?>((exitCode) {
+            return StateError(
+              'FFmpeg exited with code $exitCode before YouTube received '
+              'video: ${monitor.diagnosticSummary}',
+            );
+          }),
+        ]);
+        if (outcome case final Object error) {
+          youtube.reportPublisherError(error);
+          throw error;
+        }
+      } else {
+        await youtube.startBroadcast();
+      }
+    } catch (_) {
+      youtube.cancelPendingStart();
+      await localRecording.stop(session);
+      rethrow;
+    }
   }
 
   @override

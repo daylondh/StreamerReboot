@@ -12,6 +12,7 @@ import 'controllers/camera_sources_controller.dart';
 import 'controllers/stream_controller.dart';
 import 'domain/stream_session.dart';
 import 'services/media_permission_service.dart';
+import 'services/ffmpeg_stream_engine.dart';
 import 'services/stream_engine.dart';
 import 'services/stream_settings_store.dart';
 import 'services/youtube_live_service.dart';
@@ -95,7 +96,8 @@ class _StartupGate extends StatefulWidget {
 class _StartupGateState extends State<_StartupGate> {
   StreamController? _controller;
   CameraSourcesController? _cameraSources;
-  LocalRecordingStreamEngine? _recordingEngine;
+  AudioSourcesController? _audioSources;
+  FfmpegStreamEngine? _recordingEngine;
   YouTubeLiveService? _youtube;
 
   @override
@@ -106,17 +108,20 @@ class _StartupGateState extends State<_StartupGate> {
 
   Future<void> _prepareApp() async {
     final cameraSources = CameraSourcesController();
-    final recordingEngine = LocalRecordingStreamEngine(
-      recorderForCamera: (cameraName) {
+    final audioSources = AudioSourcesController();
+    final youtube = YouTubeLiveService();
+    final recordingEngine = FfmpegStreamEngine(
+      cameraForName: (cameraName) {
         for (final source in cameraSources.sources) {
           if (source.description.name == cameraName && source.isReady) {
-            return CameraVideoRecorder(source.controller!);
+            return source.controller;
           }
         }
         return null;
       },
+      audioSources: audioSources,
+      ingestionUrl: () => youtube.target?.ingestionUrl,
     );
-    final youtube = YouTubeLiveService();
     final controller = StreamController(
       YouTubeProvisioningStreamEngine(
         localRecording: recordingEngine,
@@ -133,6 +138,7 @@ class _StartupGateState extends State<_StartupGate> {
     if (!mounted) {
       controller.dispose();
       cameraSources.dispose();
+      audioSources.dispose();
       recordingEngine.dispose();
       youtube.dispose();
       return;
@@ -140,6 +146,7 @@ class _StartupGateState extends State<_StartupGate> {
     setState(() {
       _controller = controller;
       _cameraSources = cameraSources;
+      _audioSources = audioSources;
       _recordingEngine = recordingEngine;
       _youtube = youtube;
     });
@@ -151,6 +158,7 @@ class _StartupGateState extends State<_StartupGate> {
       return StreamDashboard(
         controller: _controller!,
         cameraSources: _cameraSources!,
+        audioSources: _audioSources!,
         recordingEngine: _recordingEngine!,
         youtube: _youtube!,
       );
@@ -199,13 +207,15 @@ class StreamDashboard extends StatefulWidget {
   const StreamDashboard({
     required this.controller,
     required this.cameraSources,
+    required this.audioSources,
     required this.recordingEngine,
     required this.youtube,
     super.key,
   });
   final StreamController controller;
   final CameraSourcesController cameraSources;
-  final LocalRecordingStreamEngine recordingEngine;
+  final AudioSourcesController audioSources;
+  final FfmpegStreamEngine recordingEngine;
   final YouTubeLiveService youtube;
 
   @override
@@ -237,7 +247,7 @@ class _StreamDashboardState extends State<StreamDashboard> {
     );
     widget.controller.addListener(_syncTextFromSession);
     _cameraSources = widget.cameraSources;
-    _audioSources = AudioSourcesController();
+    _audioSources = widget.audioSources;
     WidgetsBinding.instance.addPostFrameCallback(
       (_) => _initializeMediaAccess(),
     );
@@ -1516,7 +1526,7 @@ class _GoLiveBar extends StatelessWidget {
   });
   final StreamController controller;
   final StreamSession session;
-  final LocalRecordingStreamEngine recordingEngine;
+  final FfmpegStreamEngine recordingEngine;
   final YouTubeLiveService youtube;
 
   @override

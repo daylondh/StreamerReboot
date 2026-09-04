@@ -12,6 +12,13 @@ abstract interface class StreamEngine {
   Future<void> stop(StreamSession session);
 }
 
+/// Optional process health exposed by stream engines backed by an external
+/// publisher such as FFmpeg.
+abstract interface class StreamProcessMonitor {
+  Future<int> get processExitCode;
+  String get diagnosticSummary;
+}
+
 abstract interface class VideoRecorder {
   Future<void> start();
   Future<String> stop();
