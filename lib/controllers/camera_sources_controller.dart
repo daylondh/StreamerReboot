@@ -14,6 +14,22 @@ class CameraSource {
 }
 
 class CameraSourcesController extends ChangeNotifier {
+  CameraSourcesController({
+    Future<List<CameraDescription>> Function()? listCameras,
+    CameraController Function(CameraDescription, ResolutionPreset)?
+    createCamera,
+  }) : _listCameras = listCameras ?? availableCameras,
+       _createCamera = createCamera ?? _defaultCamera;
+
+  final Future<List<CameraDescription>> Function() _listCameras;
+  final CameraController Function(CameraDescription, ResolutionPreset)
+  _createCamera;
+
+  static CameraController _defaultCamera(
+    CameraDescription description,
+    ResolutionPreset preset,
+  ) => CameraController(description, preset, enableAudio: true, fps: 30);
+
   static const _settingsKey = 'camera.feedDelays';
   final List<CameraSource> _sources = [];
   bool _isDiscovering = false;
@@ -39,7 +55,7 @@ class CameraSourcesController extends ChangeNotifier {
     await _saveChain;
     await _disposeSources();
     try {
-      final cameras = await availableCameras();
+      final cameras = await _listCameras();
       _persistedDelays = await _loadDelays();
       _sources.addAll(
         cameras.map((camera) {
@@ -92,14 +108,30 @@ class CameraSourcesController extends ChangeNotifier {
   }
 
   Future<void> _initialize(CameraSource source) async {
-    final controller = CameraController(
-      source.description,
-      ResolutionPreset.high,
-      // The local recording backend uses the camera package's native A/V
-      // writer. Preview remains silent, while recorded files include audio.
-      enableAudio: true,
-      fps: 30,
-    );
+    await _initializeWithPreset(source, ResolutionPreset.high);
+    if (defaultTargetPlatform == TargetPlatform.windows &&
+        (source.error?.contains('Failed to enumerate camera media types') ??
+            false)) {
+      // Some HDMI capture adapters expose only modes above the Windows
+      // backend's 720p limit for `high`. `max` removes that height limit,
+      // including for adapters that expose only 3840x2160 (4K) modes.
+      await _initializeWithPreset(source, ResolutionPreset.max);
+      if (source.error != null) {
+        source.error =
+            '${source.error}\nClose OBS and other camera apps, then choose '
+            'Rescan. If this persists, the capture device may need a '
+            'different Windows capture backend.';
+      }
+    }
+    notifyListeners();
+  }
+
+  Future<void> _initializeWithPreset(
+    CameraSource source,
+    ResolutionPreset preset,
+  ) async {
+    source.error = null;
+    final controller = _createCamera(source.description, preset);
     source.controller = controller;
     try {
       await controller.initialize();
@@ -112,7 +144,6 @@ class CameraSourcesController extends ChangeNotifier {
       await controller.dispose();
       source.controller = null;
     }
-    notifyListeners();
   }
 
   Future<void> _disposeSources() async {

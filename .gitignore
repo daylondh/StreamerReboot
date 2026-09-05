@@ -44,6 +44,7 @@ client_secrets.json
 .pub/
 /build/
 /coverage/
+/dist/
 *.class
 
 # Flutter release artifacts
@@ -61,3 +62,4 @@ app.*.map.json
 **/DerivedData/
 **/xcuserdata/
 **/*.xcuserstate
+dist/camera-compatibility/ChurchStreamer-Windows-x64/data/flutter_assets/assets/church_app_icon.svg

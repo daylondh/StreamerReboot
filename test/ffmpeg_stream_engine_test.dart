@@ -2,6 +2,21 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:streamer_reboot/services/ffmpeg_stream_engine.dart';
 
 void main() {
+  test('preserves 4K capture dimensions in the Windows encoder input', () {
+    final arguments = FfmpegStreamEngine.buildArguments(
+      videoPort: 41001,
+      audioPort: 41002,
+      width: 3840,
+      height: 2160,
+      pixelFormat: 'bgra',
+      videoEncoder: 'h264_mf',
+      ingestionUrl: 'rtmps://youtube.example/live/key',
+    );
+
+    expect(arguments, containsAllInOrder(['-video_size', '3840x2160']));
+    expect(arguments, containsAllInOrder(['-c:v', 'h264_mf']));
+  });
+
   test('builds a YouTube-compatible FFmpeg tee pipeline', () {
     final arguments = FfmpegStreamEngine.buildArguments(
       videoPort: 41001,
