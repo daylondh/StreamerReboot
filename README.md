@@ -1,6 +1,6 @@
 # Church Streamer
 
-A desktop successor to the original ChurchStreamer: a calm,
+A desktop successor to the original ChurchStreamer: a
 volunteer-friendly desktop app for starting a church livestream and local
 recording without requiring operators to understand broadcast software.
 
@@ -15,20 +15,17 @@ This first slice runs on Windows, macOS, and Linux and includes:
 - automatic discovery and live preview of connected cameras;
 - independent 0–1000 ms synchronization delay for every camera and audio input;
 - suggested service titles and YouTube privacy controls;
-- a local-recording option;
-- a tested stream-session state machine; and
-- a `StreamEngine` boundary ready for native capture.
+- a local recording option; and
+- a tested stream that supports multiple cameras and audio.
 
 Local recording, YouTube authorization, live-event provisioning, and FFmpeg
-RTMP publishing are implemented. During a live session, FFmpeg sends the camera
-program and mixed enabled microphone inputs to YouTube while writing the same
-program to a local MP4 archive.
+RTMP publishing are implemented. 
 
 ## Run it
 
 ```sh
 flutter pub get
-flutter run -d macos   # or windows / linux
+flutter run -d windows   # or macos / linux
 ```
 
 Run checks with `flutter analyze` and `flutter test`.
@@ -42,14 +39,14 @@ Run checks with `flutter analyze` and `flutter test`.
 4. Download its JSON credentials, rename the file to `client_secrets.json`, and
    place it in the project root. This filename is ignored by Git.
 5. Restart Church Streamer and select **Connect YouTube**. Authorization opens
-   in the system browser and returns through a temporary localhost callback.
+   in the system browser and returns.
 
-After the first successful authorization, the refresh credentials are kept in
+After the first successful authorization, the credentials are kept in
 the operating system's secure credential store. Church Streamer attempts to
 reconnect and validate that same channel on every startup. If Google revokes
 the authorization, the app returns to the Connect YouTube state.
 
-Use `client_secrets.example.json` as a shape reference only. Never commit the
+Use `client_secrets.example.json` as a reference only. Never commit the
 downloaded credentials or expose the RTMP ingestion URL, which contains the
 channel's stream key.
 
@@ -66,45 +63,12 @@ sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
 YouTube reconnection stores OAuth refresh credentials through libsecret. A
 Secret Service-compatible keyring must also be running; GNOME Keyring and KDE
 Wallet normally provide one automatically in their respective desktop
-environments. Minimal window-manager sessions may need to start a keyring
+environments. Minimal window manager sessions may need to start a keyring
 service explicitly.
 
-macOS asks for camera permission on first launch. Windows requires no additional
+MacOS asks for camera permission on first launch. Windows requires no additional
 camera runtime setup.
 
 ## Media permissions
 
-Before opening capture devices, the app checks the platform's native permission
-state. Previously granted access proceeds silently. On first use, macOS shows
-an explanation followed by its native per-app prompts. Denied access does not
-trigger repeated prompts; the dashboard instead gives recovery guidance and a
-check-again action. Windows enforces its desktop-app privacy controls when
-devices are opened. Linux enforces device, group, or sandbox permissions; there
-is no universal native desktop prompt outside a portal-based package.
-
-## Audio inputs
-
-Connected audio capture devices are discovered after media access is granted.
-Each enabled input is captured as 48 kHz mono PCM and displays a live dBFS
-meter. The per-input control applies software gain from 0% to 200% to the PCM
-stream that will feed the broadcast mixer. Turning an input off releases that
-capture device completely.
-
-## Proposed architecture
-
-Flutter owns the user experience and session state. A native `StreamEngine`
-owns device discovery, preview, encoding, recording, and RTMP/SRT output. The
-most practical OBS-free first backend is FFmpeg on Windows/macOS and GStreamer
-on Linux, hidden behind the same Dart interface. A destination adapter can then
-create and bind YouTube Live broadcasts through OAuth.
-
-Suggested next vertical slice:
-
-1. enumerate cameras and microphones;
-2. show a real local preview;
-3. record a short local test file;
-4. add encrypted credential storage and YouTube OAuth; then
-5. publish RTMP and report dropped frames/bitrate to the dashboard.
-
-This validates the hardest cross-platform media work before coupling it to a
-live destination.
+Naturally, the app requires camera and audio input access, along with file access to save off a recording.

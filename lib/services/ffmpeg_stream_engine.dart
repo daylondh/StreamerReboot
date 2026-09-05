@@ -65,6 +65,9 @@ class FfmpegStreamEngine extends ChangeNotifier
   bool _slateActive = false;
   Uint8List? _startupSlate;
   Uint8List? _shutdownSlate;
+  Uint8List? _fadeSlate;
+  DateTime? _fadeStartedAt;
+  bool _fadingToSlate = false;
   Completer<void>? _startupSlateRelease;
   StreamSubscription<String>? _stderrSubscription;
   int? _frameWidth;
@@ -248,6 +251,7 @@ class FfmpegStreamEngine extends ChangeNotifier
     try {
       final shutdownSlate = _shutdownSlate;
       if (shutdownSlate != null) {
+        await _crossfade(shutdownSlate, toSlate: true);
         await _playSlate(shutdownSlate, const Duration(seconds: 5));
       }
       _addEvent(RecordingLifecycleStage.finalizing, 'FFmpeg outputs');
@@ -364,26 +368,23 @@ class FfmpegStreamEngine extends ChangeNotifier
     final rowBytes = frame.width * 4;
     try {
       final sourceFormat = _cameraPixelFormat(frame);
+      Uint8List bytes;
       if (frame.width == targetWidth &&
           frame.height == targetHeight &&
           sourceFormat == targetFormat &&
           plane.bytesPerRow == rowBytes) {
-        _videoQueue.add(
-          Uint8List.fromList(plane.bytes),
-          videoDelay,
-          socket,
-          (error) => _recordTransportError('video', error),
-        );
-        return;
-      }
-      _videoQueue.add(
-        _normalizeFrame(
+        bytes = Uint8List.fromList(plane.bytes);
+      } else {
+        bytes = _normalizeFrame(
           frame,
           sourceFormat: sourceFormat,
           targetWidth: targetWidth,
           targetHeight: targetHeight,
           targetFormat: targetFormat,
-        ),
+        );
+      }
+      _videoQueue.add(
+        _applyFade(bytes),
         videoDelay,
         socket,
         (error) => _recordTransportError('video', error),
@@ -483,7 +484,8 @@ class FfmpegStreamEngine extends ChangeNotifier
 
   Future<void> _playStartupSlate(Uint8List bytes) async {
     await _playSlateUntil(bytes, _startupSlateRelease!.future);
-    await _playSlate(bytes, const Duration(seconds: 5));
+    await _playSlate(bytes, const Duration(seconds: 5), keepActive: true);
+    await _crossfade(bytes, toSlate: false);
   }
 
   @override
@@ -493,7 +495,7 @@ class FfmpegStreamEngine extends ChangeNotifier
     if (!release.isCompleted) release.complete();
     // Keep the splash visible for its full configured program duration after
     // YouTube has made the broadcast visible to viewers.
-    await Future<void>.delayed(const Duration(seconds: 5));
+    await Future<void>.delayed(const Duration(milliseconds: 5600));
     _startupSlateRelease = null;
   }
 
@@ -520,7 +522,11 @@ class FfmpegStreamEngine extends ChangeNotifier
     await until;
   }
 
-  Future<void> _playSlate(Uint8List bytes, Duration duration) async {
+  Future<void> _playSlate(
+    Uint8List bytes,
+    Duration duration, {
+    bool keepActive = false,
+  }) async {
     final socket = _videoSocket;
     if (socket == null) return;
     _slateTimer?.cancel();
@@ -545,7 +551,49 @@ class FfmpegStreamEngine extends ChangeNotifier
     if (generation != _slateGeneration) return;
     _slateTimer?.cancel();
     _slateTimer = null;
+    if (!keepActive) _slateActive = false;
+  }
+
+  static const _fadeDuration = Duration(milliseconds: 600);
+
+  Future<void> _crossfade(Uint8List slate, {required bool toSlate}) async {
+    _slateTimer?.cancel();
+    _slateTimer = null;
+    _videoQueue.clear();
+    _fadeSlate = slate;
+    _fadeStartedAt = DateTime.now();
+    _fadingToSlate = toSlate;
     _slateActive = false;
+    await Future<void>.delayed(_fadeDuration);
+    _fadeSlate = null;
+    _fadeStartedAt = null;
+    _slateActive = toSlate;
+  }
+
+  Uint8List _applyFade(Uint8List camera) {
+    final slate = _fadeSlate;
+    final startedAt = _fadeStartedAt;
+    if (slate == null || startedAt == null || slate.length != camera.length) {
+      return camera;
+    }
+    final elapsed = DateTime.now().difference(startedAt).inMicroseconds;
+    final progress = (elapsed / _fadeDuration.inMicroseconds).clamp(0.0, 1.0);
+    final cameraWeight = ((_fadingToSlate ? 1 - progress : progress) * 256)
+        .round();
+    final slateWeight = 256 - cameraWeight;
+    final output = Uint8List(camera.length);
+    for (var index = 0; index < camera.length; index += 4) {
+      output[index] =
+          (camera[index] * cameraWeight + slate[index] * slateWeight) >> 8;
+      output[index + 1] =
+          (camera[index + 1] * cameraWeight + slate[index + 1] * slateWeight) >>
+          8;
+      output[index + 2] =
+          (camera[index + 2] * cameraWeight + slate[index + 2] * slateWeight) >>
+          8;
+      output[index + 3] = 255;
+    }
+    return output;
   }
 
   Future<Uint8List> _renderSlate({
@@ -642,6 +690,8 @@ class FfmpegStreamEngine extends ChangeNotifier
     _slateTimer?.cancel();
     _slateTimer = null;
     _slateActive = false;
+    _fadeSlate = null;
+    _fadeStartedAt = null;
     _audioTimer?.cancel();
     _audioTimer = null;
     for (final subscription in _audioSubscriptions) {
