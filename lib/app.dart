@@ -585,7 +585,10 @@ class _SettingsPanel extends StatelessWidget {
       child: ListView(
         children: [
           Tooltip(
-            message: titleController.text,
+            // Empty tooltips remove their wrapper, recreating the focused field.
+            message: titleController.text.isEmpty
+                ? 'Stream name'
+                : titleController.text,
             child: TextField(
               key: const Key('service-title'),
               controller: titleController,
@@ -616,7 +619,9 @@ class _SettingsPanel extends StatelessWidget {
                 : controller.updateStartupSplashEnabled,
           ),
           Tooltip(
-            message: startupTextController.text,
+            message: startupTextController.text.isEmpty
+                ? 'Additional startup text'
+                : startupTextController.text,
             child: TextField(
               key: const Key('startup-text'),
               controller: startupTextController,
@@ -646,7 +651,9 @@ class _SettingsPanel extends StatelessWidget {
                 : controller.updateShutdownSplashEnabled,
           ),
           Tooltip(
-            message: shutdownTextController.text,
+            message: shutdownTextController.text.isEmpty
+                ? 'Additional shutdown text'
+                : shutdownTextController.text,
             child: TextField(
               key: const Key('shutdown-text'),
               controller: shutdownTextController,
