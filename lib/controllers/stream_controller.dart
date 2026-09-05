@@ -23,7 +23,10 @@ class StreamController extends ChangeNotifier {
     _session = _session.copyWith(
       startupSplashEnabled: settings.startupSplashEnabled,
       shutdownSplashEnabled: settings.shutdownSplashEnabled,
+      privacy: settings.privacy,
+      recordLocally: settings.recordLocally,
       recordingDirectory: settings.recordingDirectory,
+      cameraName: settings.cameraName,
       startupText: settings.startupText,
       shutdownText: settings.shutdownText,
     );
@@ -50,29 +53,31 @@ class StreamController extends ChangeNotifier {
   void updatePrivacy(ServicePrivacy value) {
     _session = _session.copyWith(privacy: value);
     notifyListeners();
+    _saveSettings();
   }
 
   void updateRecording(bool value) {
     _session = _session.copyWith(recordLocally: value);
     notifyListeners();
+    _saveSettings();
   }
 
   void updateRecordingDirectory(String value) {
     _session = _session.copyWith(recordingDirectory: value, clearError: true);
     notifyListeners();
-    _saveTextSettings();
+    _saveSettings();
   }
 
   void updateStartupText(String value) {
     _session = _session.copyWith(startupText: value, clearError: true);
     notifyListeners();
-    _saveTextSettings();
+    _saveSettings();
   }
 
   void updateStartupSplashEnabled(bool value) {
     _session = _session.copyWith(startupSplashEnabled: value, clearError: true);
     notifyListeners();
-    _saveTextSettings();
+    _saveSettings();
   }
 
   void updateShutdownSplashEnabled(bool value) {
@@ -81,21 +86,24 @@ class StreamController extends ChangeNotifier {
       clearError: true,
     );
     notifyListeners();
-    _saveTextSettings();
+    _saveSettings();
   }
 
   void updateShutdownText(String value) {
     _session = _session.copyWith(shutdownText: value, clearError: true);
     notifyListeners();
-    _saveTextSettings();
+    _saveSettings();
   }
 
-  Future<void> _saveTextSettings() async {
+  Future<void> _saveSettings() async {
     await settingsStore?.save(
       StreamTextSettings(
         startupSplashEnabled: _session.startupSplashEnabled,
         shutdownSplashEnabled: _session.shutdownSplashEnabled,
+        privacy: _session.privacy,
+        recordLocally: _session.recordLocally,
         recordingDirectory: _session.recordingDirectory,
+        cameraName: _session.cameraName,
         startupText: _session.startupText,
         shutdownText: _session.shutdownText,
       ),
@@ -108,6 +116,7 @@ class StreamController extends ChangeNotifier {
     if (!_session.isLive) {
       _session = _session.copyWith(cameraName: cameraName, clearError: true);
       notifyListeners();
+      _saveSettings();
       return;
     }
 
@@ -117,6 +126,7 @@ class StreamController extends ChangeNotifier {
     try {
       await _engine.switchCamera(cameraName);
       _session = _session.copyWith(cameraName: cameraName, clearError: true);
+      _saveSettings();
     } catch (error) {
       _session = _session.copyWith(error: 'Could not switch cameras: $error');
     } finally {

@@ -1,5 +1,8 @@
+import 'dart:convert';
+
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class CameraSource {
   CameraSource({required this.description, this.controller, this.error});
@@ -11,9 +14,12 @@ class CameraSource {
 }
 
 class CameraSourcesController extends ChangeNotifier {
+  static const _settingsKey = 'camera.feedDelays';
   final List<CameraSource> _sources = [];
   bool _isDiscovering = false;
   String? _discoveryError;
+  Future<void> _saveChain = Future<void>.value();
+  Map<String, dynamic> _persistedDelays = {};
 
   List<CameraSource> get sources => List.unmodifiable(_sources);
   bool get isDiscovering => _isDiscovering;
@@ -22,6 +28,7 @@ class CameraSourcesController extends ChangeNotifier {
   void setDelay(CameraSource source, int delayMs) {
     source.delayMs = delayMs.clamp(0, 1000);
     notifyListeners();
+    _saveDelays();
   }
 
   Future<void> discover() async {
@@ -29,11 +36,20 @@ class CameraSourcesController extends ChangeNotifier {
     _isDiscovering = true;
     _discoveryError = null;
     notifyListeners();
+    await _saveChain;
     await _disposeSources();
     try {
       final cameras = await availableCameras();
+      _persistedDelays = await _loadDelays();
       _sources.addAll(
-        cameras.map((camera) => CameraSource(description: camera)),
+        cameras.map((camera) {
+          final source = CameraSource(description: camera);
+          final savedDelay = _persistedDelays[camera.name];
+          if (savedDelay is num) {
+            source.delayMs = savedDelay.round().clamp(0, 1000);
+          }
+          return source;
+        }),
       );
       notifyListeners();
       // Sequential initialization is friendlier to bandwidth-limited USB hubs.
@@ -48,6 +64,31 @@ class CameraSourcesController extends ChangeNotifier {
       _isDiscovering = false;
       notifyListeners();
     }
+  }
+
+  Future<Map<String, dynamic>> _loadDelays() async {
+    final preferences = await SharedPreferences.getInstance();
+    final encoded = preferences.getString(_settingsKey);
+    if (encoded == null) return <String, dynamic>{};
+    try {
+      final decoded = jsonDecode(encoded);
+      return decoded is Map<String, dynamic>
+          ? Map<String, dynamic>.of(decoded)
+          : <String, dynamic>{};
+    } catch (_) {
+      return <String, dynamic>{};
+    }
+  }
+
+  void _saveDelays() {
+    for (final source in _sources) {
+      _persistedDelays[source.description.name] = source.delayMs;
+    }
+    final snapshot = Map<String, dynamic>.of(_persistedDelays);
+    _saveChain = _saveChain.then((_) async {
+      final preferences = await SharedPreferences.getInstance();
+      await preferences.setString(_settingsKey, jsonEncode(snapshot));
+    });
   }
 
   Future<void> _initialize(CameraSource source) async {
@@ -87,6 +128,7 @@ class CameraSourcesController extends ChangeNotifier {
   }
 
   Future<void> release() async {
+    await _saveChain;
     await _disposeSources();
     notifyListeners();
   }

@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:record/record.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class AudioSource {
   AudioSource({required this.device, required this.recorder});
@@ -20,9 +22,12 @@ class AudioSource {
 }
 
 class AudioSourcesController extends ChangeNotifier {
+  static const _settingsKey = 'audio.inputSettings';
   final List<AudioSource> _sources = [];
   bool _isDiscovering = false;
   String? _discoveryError;
+  Future<void> _saveChain = Future<void>.value();
+  Map<String, dynamic> _persistedSettings = {};
 
   List<AudioSource> get sources => List.unmodifiable(_sources);
   bool get isDiscovering => _isDiscovering;
@@ -36,6 +41,7 @@ class AudioSourcesController extends ChangeNotifier {
     _isDiscovering = true;
     _discoveryError = null;
     notifyListeners();
+    await _saveChain;
     await _disposeSources();
 
     final enumerator = AudioRecorder();
@@ -45,11 +51,13 @@ class AudioSourcesController extends ChangeNotifier {
         return;
       }
       final devices = await enumerator.listInputDevices();
+      _persistedSettings = await _loadSettings();
       for (final device in devices) {
         final source = AudioSource(device: device, recorder: AudioRecorder());
+        _restore(source, _persistedSettings[_deviceKey(device)]);
         _sources.add(source);
         notifyListeners();
-        await _start(source);
+        if (source.enabled) await _start(source);
       }
     } catch (error) {
       _discoveryError = error.toString();
@@ -66,6 +74,7 @@ class AudioSourcesController extends ChangeNotifier {
     source.error = null;
     source.level = 0;
     notifyListeners();
+    _saveSettings();
     if (enabled) {
       await _start(source);
     } else {
@@ -76,11 +85,58 @@ class AudioSourcesController extends ChangeNotifier {
   void setGain(AudioSource source, double gain) {
     source.gain = gain;
     notifyListeners();
+    _saveSettings();
   }
 
   void setDelay(AudioSource source, int delayMs) {
     source.delayMs = delayMs.clamp(0, 1000);
     notifyListeners();
+    _saveSettings();
+  }
+
+  String _deviceKey(InputDevice device) =>
+      device.id.isNotEmpty ? device.id : device.label;
+
+  Future<Map<String, dynamic>> _loadSettings() async {
+    final preferences = await SharedPreferences.getInstance();
+    final encoded = preferences.getString(_settingsKey);
+    if (encoded == null) return <String, dynamic>{};
+    try {
+      final decoded = jsonDecode(encoded);
+      return decoded is Map<String, dynamic>
+          ? Map<String, dynamic>.of(decoded)
+          : <String, dynamic>{};
+    } catch (_) {
+      return <String, dynamic>{};
+    }
+  }
+
+  void _restore(AudioSource source, Object? value) {
+    if (value is! Map<String, dynamic>) return;
+    source.enabled = value['enabled'] is bool
+        ? value['enabled'] as bool
+        : source.enabled;
+    source.gain = value['gain'] is num
+        ? (value['gain'] as num).toDouble().clamp(0, 2)
+        : source.gain;
+    source.delayMs = value['delayMs'] is num
+        ? (value['delayMs'] as num).round().clamp(0, 1000)
+        : source.delayMs;
+  }
+
+  void _saveSettings() {
+    for (final source in _sources) {
+      _persistedSettings[_deviceKey(source.device)] = {
+        'enabled': source.enabled,
+        'gain': source.gain,
+        'delayMs': source.delayMs,
+      };
+    }
+    final snapshot = Map<String, dynamic>.of(_persistedSettings);
+    _saveChain = _saveChain.then((_) async {
+      final preferences = await SharedPreferences.getInstance();
+      await preferences.setString(_settingsKey, jsonEncode(snapshot));
+    });
   }
 
   Future<void> _start(AudioSource source) async {
@@ -163,6 +219,7 @@ class AudioSourcesController extends ChangeNotifier {
   }
 
   Future<void> release() async {
+    await _saveChain;
     await _disposeSources();
     notifyListeners();
   }

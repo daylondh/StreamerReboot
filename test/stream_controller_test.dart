@@ -173,7 +173,10 @@ void main() {
       const StreamTextSettings(
         startupSplashEnabled: false,
         shutdownSplashEnabled: true,
+        privacy: ServicePrivacy.private,
+        recordLocally: false,
         recordingDirectory: '/recordings/original',
+        cameraName: 'Sanctuary wide',
         startupText: 'Welcome to worship.',
         shutdownText: 'Have a blessed week.',
       ),
@@ -182,7 +185,10 @@ void main() {
     await first.initialize();
     expect(first.session.startupSplashEnabled, isFalse);
     expect(first.session.shutdownSplashEnabled, isTrue);
+    expect(first.session.privacy, ServicePrivacy.private);
+    expect(first.session.recordLocally, isFalse);
     expect(first.session.recordingDirectory, '/recordings/original');
+    expect(first.session.cameraName, 'Sanctuary wide');
     expect(first.session.startupText, 'Welcome to worship.');
     expect(first.session.shutdownText, 'Have a blessed week.');
 
@@ -190,16 +196,32 @@ void main() {
     first.updateShutdownText('See you next Sunday.');
     first.updateStartupSplashEnabled(true);
     first.updateShutdownSplashEnabled(false);
+    first.updatePrivacy(ServicePrivacy.public);
+    first.updateRecording(true);
+    first.updateTitle('One-time custom stream name');
+    await first.selectCamera('Lectern close-up');
     first.updateRecordingDirectory('/recordings/new');
     await Future<void>.delayed(Duration.zero);
 
-    final second = StreamController(ImmediateEngine(), settingsStore: store);
+    final second = StreamController(
+      ImmediateEngine(),
+      settingsStore: store,
+      now: DateTime(2026, 9, 6, 9),
+    );
     await second.initialize();
     expect(second.session.startupSplashEnabled, isTrue);
     expect(second.session.shutdownSplashEnabled, isFalse);
+    expect(second.session.privacy, ServicePrivacy.public);
+    expect(second.session.recordLocally, isTrue);
     expect(second.session.recordingDirectory, '/recordings/new');
+    expect(second.session.cameraName, 'Lectern close-up');
     expect(second.session.startupText, 'Starting soon.');
     expect(second.session.shutdownText, 'See you next Sunday.');
+    expect(
+      second.session.title,
+      StreamController.suggestedServiceTitle(DateTime(2026, 9, 6, 9)),
+    );
+    expect(second.session.title, isNot('One-time custom stream name'));
   });
 
   test('passes the recording destination to the stream engine', () async {
