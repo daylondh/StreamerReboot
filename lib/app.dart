@@ -119,6 +119,12 @@ class _StartupGateState extends State<_StartupGate> {
         }
         return null;
       },
+      cameraDelayForName: (cameraName) {
+        for (final source in cameraSources.sources) {
+          if (source.description.name == cameraName) return source.delayMs;
+        }
+        return 0;
+      },
       audioSources: audioSources,
       ingestionUrl: () => youtube.target?.ingestionUrl,
     );
@@ -960,6 +966,8 @@ class _CameraPanel extends StatelessWidget {
               onSelect: () => streamController.selectCamera(
                 cameraSources.sources[index].description.name,
               ),
+              onDelayChanged: (delay) =>
+                  cameraSources.setDelay(cameraSources.sources[index], delay),
             ),
           ),
         );
@@ -1059,12 +1067,14 @@ class _CameraFeed extends StatelessWidget {
     required this.isSelected,
     required this.isSwitching,
     required this.onSelect,
+    required this.onDelayChanged,
   });
   final CameraSource source;
   final int number;
   final bool isSelected;
   final bool isSwitching;
   final VoidCallback onSelect;
+  final ValueChanged<int> onDelayChanged;
 
   @override
   Widget build(BuildContext context) => Material(
@@ -1151,6 +1161,15 @@ class _CameraFeed extends StatelessWidget {
                       label: const Text('Select'),
                     ),
                 ],
+              ),
+            ),
+            Positioned(
+              top: 10,
+              right: 10,
+              child: _DelayControl(
+                delayMs: source.delayMs,
+                onChanged: onDelayChanged,
+                dark: true,
               ),
             ),
           ],
@@ -1265,6 +1284,8 @@ class _AudioPanel extends StatelessWidget {
             audioSources.setEnabled(audioSources.sources[index], enabled),
         onGainChanged: (gain) =>
             audioSources.setGain(audioSources.sources[index], gain),
+        onDelayChanged: (delay) =>
+            audioSources.setDelay(audioSources.sources[index], delay),
       ),
     );
   }
@@ -1276,11 +1297,13 @@ class _AudioInput extends StatelessWidget {
     required this.number,
     required this.onEnabledChanged,
     required this.onGainChanged,
+    required this.onDelayChanged,
   });
   final AudioSource source;
   final int number;
   final ValueChanged<bool> onEnabledChanged;
   final ValueChanged<double> onGainChanged;
+  final ValueChanged<int> onDelayChanged;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -1362,6 +1385,68 @@ class _AudioInput extends StatelessWidget {
               ),
             ),
           ],
+        ),
+        const SizedBox(height: 8),
+        _DelayControl(delayMs: source.delayMs, onChanged: onDelayChanged),
+      ],
+    ),
+  );
+}
+
+class _DelayControl extends StatelessWidget {
+  const _DelayControl({
+    required this.delayMs,
+    required this.onChanged,
+    this.dark = false,
+  });
+  final int delayMs;
+  final ValueChanged<int> onChanged;
+  final bool dark;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+    decoration: BoxDecoration(
+      color: dark ? Colors.black87 : const Color(0x0F000000),
+      borderRadius: BorderRadius.circular(9),
+    ),
+    child: Row(
+      mainAxisSize: dark ? MainAxisSize.min : MainAxisSize.max,
+      children: [
+        Icon(Icons.sync, size: 16, color: dark ? Colors.white : null),
+        const SizedBox(width: 6),
+        Text('Delay', style: TextStyle(color: dark ? Colors.white : null)),
+        const SizedBox(width: 8),
+        if (dark)
+          SizedBox(
+            width: 115,
+            child: Slider(
+              value: delayMs.toDouble(),
+              min: 0,
+              max: 1000,
+              divisions: 20,
+              label: '$delayMs ms',
+              onChanged: (value) => onChanged(value.round()),
+            ),
+          )
+        else
+          Expanded(
+            child: Slider(
+              value: delayMs.toDouble(),
+              min: 0,
+              max: 1000,
+              divisions: 20,
+              label: '$delayMs ms',
+              onChanged: (value) => onChanged(value.round()),
+            ),
+          ),
+        SizedBox(
+          width: 50,
+          child: Text(
+            '$delayMs ms',
+            textAlign: TextAlign.end,
+            style: TextStyle(fontSize: 11, color: dark ? Colors.white : null),
+          ),
         ),
       ],
     ),

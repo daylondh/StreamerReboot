@@ -13,6 +13,7 @@ This first slice runs on Windows, macOS, and Linux and includes:
 
 - a responsive service setup and preview dashboard;
 - automatic discovery and live preview of connected cameras;
+- independent 0–1000 ms synchronization delay for every camera and audio input;
 - suggested service titles and YouTube privacy controls;
 - a local-recording option;
 - a tested stream-session state machine; and

@@ -10,6 +10,7 @@ class AudioSource {
   final AudioRecorder recorder;
   bool enabled = true;
   double gain = 1;
+  int delayMs = 0;
   double level = 0;
   String? error;
   StreamSubscription<Amplitude>? amplitudeSubscription;
@@ -74,6 +75,11 @@ class AudioSourcesController extends ChangeNotifier {
 
   void setGain(AudioSource source, double gain) {
     source.gain = gain;
+    notifyListeners();
+  }
+
+  void setDelay(AudioSource source, int delayMs) {
+    source.delayMs = delayMs.clamp(0, 1000);
     notifyListeners();
   }
 

@@ -13,6 +13,7 @@ import '../domain/stream_session.dart';
 import 'stream_engine.dart';
 
 typedef CameraControllerResolver = CameraController? Function(String name);
+typedef CameraDelayResolver = int Function(String name);
 typedef IngestionUrlResolver = String? Function();
 typedef FfmpegProcessStarter = Future<Process> Function(List<String> arguments);
 
@@ -22,16 +23,19 @@ class FfmpegStreamEngine extends ChangeNotifier
     implements StreamEngine, StreamProcessMonitor {
   FfmpegStreamEngine({
     required this.cameraForName,
+    CameraDelayResolver? cameraDelayForName,
     required this.audioSources,
     required this.ingestionUrl,
     Future<Directory> Function()? defaultDirectory,
     FfmpegProcessStarter? processStarter,
     Future<bool> Function()? ffmpegChecker,
-  }) : _defaultDirectory = defaultDirectory ?? getApplicationDocumentsDirectory,
+  }) : cameraDelayForName = cameraDelayForName ?? ((_) => 0),
+       _defaultDirectory = defaultDirectory ?? getApplicationDocumentsDirectory,
        _processStarter = processStarter ?? _startFfmpeg,
        _ffmpegChecker = ffmpegChecker ?? _isFfmpegInstalled;
 
   final CameraControllerResolver cameraForName;
+  final CameraDelayResolver cameraDelayForName;
   final AudioSourcesController audioSources;
   final IngestionUrlResolver ingestionUrl;
   final Future<Directory> Function() _defaultDirectory;
@@ -48,11 +52,13 @@ class FfmpegStreamEngine extends ChangeNotifier
   FfmpegAvailability _ffmpegAvailability = FfmpegAvailability.checking;
   Process? _process;
   CameraController? _camera;
+  String? _activeCameraName;
   Socket? _videoSocket;
   Socket? _audioSocket;
   ServerSocket? _videoServer;
   ServerSocket? _audioServer;
   Timer? _audioTimer;
+  final _DelayedVideoQueue _videoQueue = _DelayedVideoQueue();
   StreamSubscription<String>? _stderrSubscription;
   int? _frameWidth;
   int? _frameHeight;
@@ -107,6 +113,7 @@ class FfmpegStreamEngine extends ChangeNotifier
     try {
       final firstFrame = Completer<CameraImage>();
       _camera = camera;
+      _activeCameraName = cameraName;
       await camera.startImageStream((frame) {
         if (!firstFrame.isCompleted) firstFrame.complete(frame);
         _writeVideoFrame(frame);
@@ -174,10 +181,13 @@ class FfmpegStreamEngine extends ChangeNotifier
       throw StateError('Camera "$cameraName" is not ready.');
     }
     final previous = _camera;
+    final previousName = _activeCameraName;
     if (previous == null) throw StateError('No stream is active.');
     _addEvent(RecordingLifecycleStage.switchingCamera, cameraName);
     await previous.stopImageStream();
     _camera = next;
+    _activeCameraName = cameraName;
+    _videoQueue.clear();
     try {
       var describedFormat = false;
       await next.startImageStream((frame) {
@@ -193,6 +203,7 @@ class FfmpegStreamEngine extends ChangeNotifier
       });
     } catch (_) {
       _camera = previous;
+      _activeCameraName = previousName;
       await previous.startImageStream(_writeVideoFrame);
       rethrow;
     }
@@ -317,6 +328,10 @@ class FfmpegStreamEngine extends ChangeNotifier
       return;
     }
     final plane = frame.planes.first;
+    final cameraName = _activeCameraName;
+    final videoDelay = Duration(
+      milliseconds: cameraName == null ? 0 : cameraDelayForName(cameraName),
+    );
     final rowBytes = frame.width * 4;
     try {
       final sourceFormat = _cameraPixelFormat(frame);
@@ -324,10 +339,15 @@ class FfmpegStreamEngine extends ChangeNotifier
           frame.height == targetHeight &&
           sourceFormat == targetFormat &&
           plane.bytesPerRow == rowBytes) {
-        socket.add(plane.bytes);
+        _videoQueue.add(
+          Uint8List.fromList(plane.bytes),
+          videoDelay,
+          socket,
+          (error) => _recordTransportError('video', error),
+        );
         return;
       }
-      socket.add(
+      _videoQueue.add(
         _normalizeFrame(
           frame,
           sourceFormat: sourceFormat,
@@ -335,6 +355,9 @@ class FfmpegStreamEngine extends ChangeNotifier
           targetHeight: targetHeight,
           targetFormat: targetFormat,
         ),
+        videoDelay,
+        socket,
+        (error) => _recordTransportError('video', error),
       );
     } catch (error) {
       _recordTransportError('video', error);
@@ -402,7 +425,11 @@ class FfmpegStreamEngine extends ChangeNotifier
         return;
       }
       final chunks = [
-        for (final source in enabled) _audioQueues[source]!.take(byteCount),
+        for (final source in enabled)
+          _audioQueues[source]!.takeDelayed(
+            byteCount,
+            source.delayMs * 96, // 48 kHz, mono, 16-bit = 96 bytes/ms.
+          ),
       ];
       final output = Uint8List(byteCount);
       final outputData = ByteData.sublistView(output);
@@ -472,8 +499,10 @@ class FfmpegStreamEngine extends ChangeNotifier
     }
     _audioSubscriptions.clear();
     _audioQueues.clear();
+    _videoQueue.clear();
     final camera = _camera;
     _camera = null;
+    _activeCameraName = null;
     if (camera?.value.isStreamingImages ?? false) {
       await _ignoreCleanup(camera!.stopImageStream(), 'camera image stream');
     }
@@ -622,4 +651,68 @@ class _PcmQueue {
     }
     return output;
   }
+
+  Uint8List takeDelayed(int count, int delayBytes) {
+    // Keep the requested amount of captured audio queued. When the delay is
+    // raised, emit silence while the buffer grows; when lowered, discard the
+    // excess so live adjustments settle immediately.
+    final target = delayBytes + count;
+    if (_bytes.length < target) return Uint8List(count);
+    while (_bytes.length > target) {
+      _bytes.removeFirst();
+    }
+    return take(count);
+  }
+}
+
+class _DelayedVideoQueue {
+  final Queue<_DelayedVideoFrame> _frames = Queue<_DelayedVideoFrame>();
+  Timer? _timer;
+
+  void add(
+    Uint8List bytes,
+    Duration delay,
+    Socket socket,
+    void Function(Object error) onError,
+  ) {
+    if (delay == Duration.zero && _frames.isEmpty) {
+      try {
+        socket.add(bytes);
+      } catch (error) {
+        onError(error);
+      }
+      return;
+    }
+    _frames.add(_DelayedVideoFrame(bytes, DateTime.now().add(delay)));
+    _schedule(socket, onError);
+  }
+
+  void _schedule(Socket socket, void Function(Object error) onError) {
+    _timer?.cancel();
+    if (_frames.isEmpty) return;
+    final wait = _frames.first.sendAt.difference(DateTime.now());
+    _timer = Timer(wait.isNegative ? Duration.zero : wait, () {
+      final now = DateTime.now();
+      try {
+        while (_frames.isNotEmpty && !_frames.first.sendAt.isAfter(now)) {
+          socket.add(_frames.removeFirst().bytes);
+        }
+      } catch (error) {
+        onError(error);
+      }
+      _schedule(socket, onError);
+    });
+  }
+
+  void clear() {
+    _timer?.cancel();
+    _timer = null;
+    _frames.clear();
+  }
+}
+
+class _DelayedVideoFrame {
+  const _DelayedVideoFrame(this.bytes, this.sendAt);
+  final Uint8List bytes;
+  final DateTime sendAt;
 }

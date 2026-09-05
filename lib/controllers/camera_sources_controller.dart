@@ -6,6 +6,7 @@ class CameraSource {
   final CameraDescription description;
   CameraController? controller;
   String? error;
+  int delayMs = 0;
   bool get isReady => controller?.value.isInitialized ?? false;
 }
 
@@ -17,6 +18,11 @@ class CameraSourcesController extends ChangeNotifier {
   List<CameraSource> get sources => List.unmodifiable(_sources);
   bool get isDiscovering => _isDiscovering;
   String? get discoveryError => _discoveryError;
+
+  void setDelay(CameraSource source, int delayMs) {
+    source.delayMs = delayMs.clamp(0, 1000);
+    notifyListeners();
+  }
 
   Future<void> discover() async {
     if (_isDiscovering) return;
