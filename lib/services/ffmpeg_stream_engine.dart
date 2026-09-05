@@ -831,6 +831,8 @@ class FfmpegStreamEngine extends ChangeNotifier
   }
 
   static List<String> get _ffmpegCandidates => [
+    if (Platform.isWindows)
+      '${File(Platform.resolvedExecutable).parent.path}\\ffmpeg.exe',
     'ffmpeg',
     if (Platform.isMacOS) ...[
       '/usr/local/bin/ffmpeg',

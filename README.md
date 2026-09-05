@@ -30,6 +30,27 @@ flutter run -d windows   # or macos / linux
 
 Run checks with `flutter analyze` and `flutter test`.
 
+## Transfer a Windows release to another PC
+
+On the Windows build computer, run PowerShell from the project root:
+
+```powershell
+.\scripts\Package-Windows.ps1 -IncludeClientSecrets
+```
+
+The script builds the release, copies the complete Flutter runner directory,
+bundles a compatible `ffmpeg.exe`, checks the package, and creates
+`dist\ChurchStreamer-Windows-x64.zip`. Pass `-FfmpegPath` if FFmpeg is not on
+`PATH`, or `-SkipBuild` to package an existing release build. Omit
+`-IncludeClientSecrets` when YouTube support is not needed or when credentials
+will be transferred separately.
+
+On the new computer, extract the entire ZIP (do not run the app from inside the
+archive), run `Check-Windows-Prerequisites.ps1`, and then run
+`streamer_reboot.exe`. Flutter and Dart are not required. The checker verifies
+Windows/CPU compatibility, the Visual C++ runtime, bundle completeness, FFmpeg,
+and reports camera, audio, and YouTube-credential warnings.
+
 ## YouTube API setup
 
 1. In Google Cloud Console, enable **YouTube Data API v3**.
