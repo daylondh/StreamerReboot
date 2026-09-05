@@ -110,18 +110,16 @@ void main() {
     expect(controller.session.error, contains('title'));
   });
 
-  test(
-    'requires local recording while there is no remote destination',
-    () async {
-      final controller = StreamController(ImmediateEngine());
-      controller.updateRecording(false);
+  test('starts without local recording', () async {
+    final engine = ImmediateEngine();
+    final controller = StreamController(engine);
+    controller.updateRecording(false);
 
-      await controller.toggleLive();
+    await controller.toggleLive();
 
-      expect(controller.session.status, StreamStatus.failed);
-      expect(controller.session.error, contains('local recording'));
-    },
-  );
+    expect(controller.session.status, StreamStatus.live);
+    expect(engine.startedSession?.recordLocally, isFalse);
+  });
 
   test(
     'selects a camera before going live without switching the engine',

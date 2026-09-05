@@ -159,14 +159,6 @@ class StreamController extends ChangeNotifier {
       notifyListeners();
       return;
     }
-    if (!_session.recordLocally) {
-      _session = _session.copyWith(
-        status: StreamStatus.failed,
-        error: 'Enable local recording before going live.',
-      );
-      notifyListeners();
-      return;
-    }
     _session = _session.copyWith(
       status: StreamStatus.preparing,
       clearError: true,

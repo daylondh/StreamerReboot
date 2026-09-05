@@ -45,4 +45,23 @@ void main() {
     expect(arguments, containsAllInOrder(['-realtime', '1']));
     expect(arguments, containsAllInOrder(['-allow_sw', '1']));
   });
+
+  test('publishes without adding a local recording output', () {
+    final arguments = FfmpegStreamEngine.buildArguments(
+      videoPort: 41001,
+      audioPort: 41002,
+      width: 1280,
+      height: 720,
+      pixelFormat: 'bgra',
+      videoEncoder: 'libx264',
+      ingestionUrl: 'rtmps://youtube.example/live/key',
+    );
+
+    expect(
+      arguments.last,
+      '[f=flv:flvflags=no_duration_filesize:onfail=abort]'
+      'rtmps://youtube.example/live/key',
+    );
+    expect(arguments.last, isNot(contains('[f=mp4')));
+  });
 }

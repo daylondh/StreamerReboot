@@ -19,6 +19,13 @@ abstract interface class StreamProcessMonitor {
   String get diagnosticSummary;
 }
 
+/// Optional coordination for publishers that place a slate at the beginning
+/// of the encoded program. The provisioning layer calls this only after the
+/// remote broadcast has transitioned to live, so viewers see the full slate.
+abstract interface class StartupSlateController {
+  Future<void> finishStartupSlate();
+}
+
 abstract interface class VideoRecorder {
   Future<void> start();
   Future<String> stop();

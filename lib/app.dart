@@ -899,16 +899,17 @@ class _CameraPanel extends StatelessWidget {
 
   Widget _cameraList() {
     final session = streamController.session;
-    if (session.status == StreamStatus.preparing &&
-        session.startupSplashEnabled) {
-      return _StreamSlate(
-        title: session.title,
-        additionalText: session.startupText,
+    if (session.status == StreamStatus.preparing) {
+      return const _StreamOperationBlock(
+        icon: Icons.play_circle_outline,
+        label: 'Starting Stream',
       );
     }
-    if (session.status == StreamStatus.stopping &&
-        session.shutdownSplashEnabled) {
-      return _StreamSlate(additionalText: session.shutdownText);
+    if (session.status == StreamStatus.stopping) {
+      return const _StreamOperationBlock(
+        icon: Icons.stop_circle_outlined,
+        label: 'Stopping Stream',
+      );
     }
     if (requestingPermissions) {
       return const Center(child: CircularProgressIndicator());
@@ -976,15 +977,17 @@ class _CameraPanel extends StatelessWidget {
   }
 }
 
-class _StreamSlate extends StatelessWidget {
-  const _StreamSlate({this.title, required this.additionalText});
+class _StreamOperationBlock extends StatelessWidget {
+  const _StreamOperationBlock({required this.icon, required this.label});
 
-  final String? title;
-  final String additionalText;
+  final IconData icon;
+  final String label;
 
   @override
   Widget build(BuildContext context) => Container(
-    key: Key(title == null ? 'shutdown-slate' : 'startup-slate'),
+    key: Key(
+      label == 'Starting Stream' ? 'starting-stream' : 'stopping-stream',
+    ),
     decoration: BoxDecoration(
       color: Colors.black,
       borderRadius: BorderRadius.circular(14),
@@ -994,27 +997,19 @@ class _StreamSlate extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          SvgPicture.asset('assets/church_app_icon.svg', width: 72, height: 72),
-          if (title != null) ...[
-            const SizedBox(height: 24),
-            Text(
-              title!,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 30,
-                fontWeight: FontWeight.w700,
-              ),
+          Icon(icon, size: 64, color: Colors.white),
+          const SizedBox(height: 20),
+          Text(
+            label,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 30,
+              fontWeight: FontWeight.w700,
             ),
-          ],
-          if (additionalText.trim().isNotEmpty) ...[
-            const SizedBox(height: 16),
-            Text(
-              additionalText.trim(),
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.white70, fontSize: 18),
-            ),
-          ],
+          ),
+          const SizedBox(height: 18),
+          const CircularProgressIndicator(color: kAccentLime),
         ],
       ),
     ),

@@ -39,6 +39,9 @@ class YouTubeProvisioningStreamEngine implements StreamEngine {
         } else {
           await youtube.startBroadcast();
         }
+        if (localRecording case StartupSlateController slateController) {
+          await slateController.finishStartupSlate();
+        }
         return;
       } catch (error, stackTrace) {
         debugPrint('[Stream startup] $error');

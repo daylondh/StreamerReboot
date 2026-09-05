@@ -3,6 +3,7 @@ import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
@@ -20,7 +21,7 @@ typedef FfmpegProcessStarter = Future<Process> Function(List<String> arguments);
 /// Publishes camera and microphone data to YouTube while writing the same
 /// encoded program to a local MP4 archive.
 class FfmpegStreamEngine extends ChangeNotifier
-    implements StreamEngine, StreamProcessMonitor {
+    implements StreamEngine, StreamProcessMonitor, StartupSlateController {
   FfmpegStreamEngine({
     required this.cameraForName,
     CameraDelayResolver? cameraDelayForName,
@@ -58,7 +59,13 @@ class FfmpegStreamEngine extends ChangeNotifier
   ServerSocket? _videoServer;
   ServerSocket? _audioServer;
   Timer? _audioTimer;
+  Timer? _slateTimer;
+  int _slateGeneration = 0;
   final _DelayedVideoQueue _videoQueue = _DelayedVideoQueue();
+  bool _slateActive = false;
+  Uint8List? _startupSlate;
+  Uint8List? _shutdownSlate;
+  Completer<void>? _startupSlateRelease;
   StreamSubscription<String>? _stderrSubscription;
   int? _frameWidth;
   int? _frameHeight;
@@ -122,12 +129,25 @@ class FfmpegStreamEngine extends ChangeNotifier
       _frameWidth = frame.width;
       _frameHeight = frame.height;
       _pixelFormat = _ffmpegPixelFormat(frame);
+      if (session.startupSplashEnabled) {
+        _startupSlate = await _renderSlate(
+          title: session.title,
+          additionalText: session.startupText,
+        );
+      }
+      if (session.shutdownSplashEnabled) {
+        _shutdownSlate = await _renderSlate(
+          additionalText: session.shutdownText,
+        );
+      }
 
       _videoServer = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
       _audioServer = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
       final videoConnection = _videoServer!.first;
       final audioConnection = _audioServer!.first;
-      _outputPath = await _createOutputPath(session);
+      _outputPath = session.recordLocally
+          ? await _createOutputPath(session)
+          : null;
       _sensitiveIngestionUrl = target;
       final arguments = buildArguments(
         videoPort: _videoServer!.port,
@@ -137,7 +157,7 @@ class FfmpegStreamEngine extends ChangeNotifier
         pixelFormat: _pixelFormat!,
         videoEncoder: _defaultVideoEncoder,
         ingestionUrl: target,
-        outputPath: _outputPath!,
+        outputPath: _outputPath,
       );
       final process = await _processStarter(arguments);
       _process = process;
@@ -159,6 +179,11 @@ class FfmpegStreamEngine extends ChangeNotifier
       _videoServer = null;
       _audioServer = null;
       _startAudioMixer();
+      final startupSlate = _startupSlate;
+      if (startupSlate != null) {
+        _startupSlateRelease = Completer<void>();
+        unawaited(_playStartupSlate(startupSlate));
+      }
 
       final earlyExit = await Future.any<Object?>([
         process.exitCode,
@@ -221,6 +246,10 @@ class FfmpegStreamEngine extends ChangeNotifier
     _stopping = true;
     _addEvent(RecordingLifecycleStage.stopping, session.shutdownText);
     try {
+      final shutdownSlate = _shutdownSlate;
+      if (shutdownSlate != null) {
+        await _playSlate(shutdownSlate, const Duration(seconds: 5));
+      }
       _addEvent(RecordingLifecycleStage.finalizing, 'FFmpeg outputs');
       // End both inputs normally. FFmpeg treats EOF as a graceful end-of-file
       // and flushes encoder buffers plus the FLV/MP4 trailers. Its interactive
@@ -257,7 +286,7 @@ class FfmpegStreamEngine extends ChangeNotifier
     required String pixelFormat,
     required String videoEncoder,
     required String ingestionUrl,
-    required String outputPath,
+    String? outputPath,
   }) => [
     '-hide_banner',
     '-loglevel',
@@ -314,13 +343,13 @@ class FfmpegStreamEngine extends ChangeNotifier
     '2',
     '-f',
     'tee',
-    '[f=flv:flvflags=no_duration_filesize:onfail=abort]$ingestionUrl|'
-        '[f=mp4:movflags=+faststart:onfail=ignore]$outputPath',
+    '[f=flv:flvflags=no_duration_filesize:onfail=abort]$ingestionUrl'
+        '${outputPath == null ? '' : '|[f=mp4:movflags=+faststart:onfail=ignore]$outputPath'}',
   ];
 
   void _writeVideoFrame(CameraImage frame) {
     final socket = _videoSocket;
-    if (socket == null || frame.planes.isEmpty) return;
+    if (socket == null || frame.planes.isEmpty || _slateActive) return;
     final targetWidth = _frameWidth;
     final targetHeight = _frameHeight;
     final targetFormat = _pixelFormat;
@@ -452,6 +481,123 @@ class FfmpegStreamEngine extends ChangeNotifier
     }
   }
 
+  Future<void> _playStartupSlate(Uint8List bytes) async {
+    await _playSlateUntil(bytes, _startupSlateRelease!.future);
+    await _playSlate(bytes, const Duration(seconds: 5));
+  }
+
+  @override
+  Future<void> finishStartupSlate() async {
+    final release = _startupSlateRelease;
+    if (release == null) return;
+    if (!release.isCompleted) release.complete();
+    // Keep the splash visible for its full configured program duration after
+    // YouTube has made the broadcast visible to viewers.
+    await Future<void>.delayed(const Duration(seconds: 5));
+    _startupSlateRelease = null;
+  }
+
+  Future<void> _playSlateUntil(Uint8List bytes, Future<void> until) async {
+    final socket = _videoSocket;
+    if (socket == null) return;
+    _slateTimer?.cancel();
+    _videoQueue.clear();
+    _slateActive = true;
+
+    void writeFrame() {
+      try {
+        socket.add(bytes);
+      } catch (error) {
+        _recordTransportError('video', error);
+      }
+    }
+
+    writeFrame();
+    _slateTimer = Timer.periodic(
+      const Duration(milliseconds: 33),
+      (_) => writeFrame(),
+    );
+    await until;
+  }
+
+  Future<void> _playSlate(Uint8List bytes, Duration duration) async {
+    final socket = _videoSocket;
+    if (socket == null) return;
+    _slateTimer?.cancel();
+    final generation = ++_slateGeneration;
+    _videoQueue.clear();
+    _slateActive = true;
+
+    void writeFrame() {
+      try {
+        socket.add(bytes);
+      } catch (error) {
+        _recordTransportError('video', error);
+      }
+    }
+
+    writeFrame();
+    _slateTimer = Timer.periodic(
+      const Duration(milliseconds: 33),
+      (_) => writeFrame(),
+    );
+    await Future<void>.delayed(duration);
+    if (generation != _slateGeneration) return;
+    _slateTimer?.cancel();
+    _slateTimer = null;
+    _slateActive = false;
+  }
+
+  Future<Uint8List> _renderSlate({
+    String? title,
+    required String additionalText,
+  }) async {
+    final width = _frameWidth!;
+    final height = _frameHeight!;
+    final recorder = ui.PictureRecorder();
+    final canvas = ui.Canvas(recorder);
+    canvas.drawRect(
+      ui.Rect.fromLTWH(0, 0, width.toDouble(), height.toDouble()),
+      ui.Paint()..color = const ui.Color(0xff050f13),
+    );
+
+    final content = [
+      if (title != null && title.trim().isNotEmpty) title.trim(),
+      if (additionalText.trim().isNotEmpty) additionalText.trim(),
+    ];
+    if (content.isEmpty) content.add('Thank you for joining us.');
+    final paragraph =
+        (ui.ParagraphBuilder(ui.ParagraphStyle(textAlign: ui.TextAlign.center))
+            ..pushStyle(
+              ui.TextStyle(
+                color: const ui.Color(0xffffffff),
+                fontSize: math.max(24, width / 28),
+                fontWeight: ui.FontWeight.w600,
+                height: 1.35,
+              ),
+            ))
+          ..addText(content.join('\n\n'));
+    final laidOut = paragraph.build()
+      ..layout(ui.ParagraphConstraints(width: width * .8));
+    canvas.drawParagraph(
+      laidOut,
+      ui.Offset(width * .1, (height - laidOut.height) / 2),
+    );
+
+    final image = await recorder.endRecording().toImage(width, height);
+    final data = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+    image.dispose();
+    final rgba = data!.buffer.asUint8List();
+    if (_pixelFormat == 'rgba') return Uint8List.fromList(rgba);
+    final bgra = Uint8List.fromList(rgba);
+    for (var index = 0; index < bgra.length; index += 4) {
+      final red = bgra[index];
+      bgra[index] = bgra[index + 2];
+      bgra[index + 2] = red;
+    }
+    return bgra;
+  }
+
   void _consumeSocketErrors(Socket socket, String channel) {
     socket.listen(
       (_) {},
@@ -492,6 +638,10 @@ class FfmpegStreamEngine extends ChangeNotifier
   }
 
   Future<void> _closeInputFeeds() async {
+    _slateGeneration++;
+    _slateTimer?.cancel();
+    _slateTimer = null;
+    _slateActive = false;
     _audioTimer?.cancel();
     _audioTimer = null;
     for (final subscription in _audioSubscriptions) {
@@ -500,6 +650,13 @@ class FfmpegStreamEngine extends ChangeNotifier
     _audioSubscriptions.clear();
     _audioQueues.clear();
     _videoQueue.clear();
+    _startupSlate = null;
+    _shutdownSlate = null;
+    final startupRelease = _startupSlateRelease;
+    if (startupRelease != null && !startupRelease.isCompleted) {
+      startupRelease.complete();
+    }
+    _startupSlateRelease = null;
     final camera = _camera;
     _camera = null;
     _activeCameraName = null;
@@ -641,6 +798,7 @@ class FfmpegStreamEngine extends ChangeNotifier
 
 class _PcmQueue {
   final Queue<int> _bytes = Queue<int>();
+  int _bufferedDelayBytes = 0;
 
   void add(Uint8List bytes) => _bytes.addAll(bytes);
 
@@ -653,13 +811,19 @@ class _PcmQueue {
   }
 
   Uint8List takeDelayed(int count, int delayBytes) {
-    // Keep the requested amount of captured audio queued. When the delay is
-    // raised, emit silence while the buffer grows; when lowered, discard the
-    // excess so live adjustments settle immediately.
-    final target = delayBytes + count;
-    if (_bytes.length < target) return Uint8List(count);
-    while (_bytes.length > target) {
-      _bytes.removeFirst();
+    if (delayBytes < _bufferedDelayBytes) {
+      var discard = math.min(_bufferedDelayBytes - delayBytes, _bytes.length);
+      while (discard-- > 0) {
+        _bytes.removeFirst();
+      }
+      _bufferedDelayBytes = delayBytes;
+    } else if (delayBytes > _bufferedDelayBytes) {
+      // Emit silence only while intentionally growing the delay buffer. Once
+      // primed, consume whatever capture supplied this tick, just as the
+      // original non-delayed mixer did, instead of converting input jitter to
+      // repeated 20 ms gaps.
+      if (_bytes.length < delayBytes + count) return Uint8List(count);
+      _bufferedDelayBytes = delayBytes;
     }
     return take(count);
   }
