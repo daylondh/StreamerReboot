@@ -32,6 +32,21 @@ Run checks with `flutter analyze` and `flutter test`.
 
 ## Transfer a Windows release to another PC
 
+### Build on GitHub from macOS
+
+The manually triggered GitHub Actions workflow builds the Windows release on a
+Windows runner. Push the repository, open its **Actions** tab, select
+**Build Windows release**, choose **Run workflow**, and download the
+`ChurchStreamer-Windows-x64` artifact when the run finishes. Artifacts are kept
+for 14 days.
+
+The CI artifact intentionally excludes `client_secrets.json`. After extracting
+the downloaded ZIP on a trusted computer, place `client_secrets.json` beside
+`streamer_reboot.exe` before transferring the folder if YouTube support is
+needed. Never commit that credential file.
+
+### Build on a Windows development computer
+
 On the Windows build computer, run PowerShell from the project root:
 
 ```powershell

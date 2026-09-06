@@ -22,6 +22,8 @@ typedef FfmpegProcessStarter = Future<Process> Function(List<String> arguments);
 /// encoded program to a local MP4 archive.
 class FfmpegStreamEngine extends ChangeNotifier
     implements StreamEngine, StreamProcessMonitor, StartupSlateController {
+  static const _cleanupTimeout = Duration(seconds: 3);
+
   FfmpegStreamEngine({
     required this.cameraForName,
     CameraDelayResolver? cameraDelayForName,
@@ -713,8 +715,8 @@ class FfmpegStreamEngine extends ChangeNotifier
     if (camera?.value.isStreamingImages ?? false) {
       await _ignoreCleanup(camera!.stopImageStream(), 'camera image stream');
     }
-    await _ignoreCleanup(_videoSocket?.close(), 'video socket');
-    await _ignoreCleanup(_audioSocket?.close(), 'audio socket');
+    await _closeSocket(_videoSocket, 'video socket');
+    await _closeSocket(_audioSocket, 'audio socket');
     await _ignoreCleanup(_videoServer?.close(), 'video server');
     await _ignoreCleanup(_audioServer?.close(), 'audio server');
     _videoSocket = null;
@@ -723,10 +725,31 @@ class FfmpegStreamEngine extends ChangeNotifier
     _audioServer = null;
   }
 
+  Future<void> _closeSocket(Socket? socket, String resource) async {
+    if (socket == null) return;
+    try {
+      await socket.close().timeout(_cleanupTimeout);
+    } on TimeoutException {
+      debugPrint(
+        '[FFmpeg cleanup] $resource did not finish within '
+        '${_cleanupTimeout.inSeconds} seconds; forcing it closed.',
+      );
+      socket.destroy();
+    } catch (error) {
+      _recordTransportError(resource, error);
+      socket.destroy();
+    }
+  }
+
   Future<void> _ignoreCleanup(Future<void>? operation, String resource) async {
     if (operation == null) return;
     try {
-      await operation;
+      await operation.timeout(_cleanupTimeout);
+    } on TimeoutException {
+      debugPrint(
+        '[FFmpeg cleanup] $resource did not finish within '
+        '${_cleanupTimeout.inSeconds} seconds; continuing shutdown.',
+      );
     } catch (error) {
       _recordTransportError(resource, error);
     }

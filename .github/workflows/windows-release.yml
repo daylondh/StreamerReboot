@@ -1,0 +1,62 @@
+name: Build Windows release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    name: Build and package Windows x64
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install stable Flutter SDK
+        shell: pwsh
+        run: |
+          $flutterRoot = Join-Path $env:RUNNER_TEMP "flutter"
+          git clone https://github.com/flutter/flutter.git --branch stable --depth 1 $flutterRoot
+          (Join-Path $flutterRoot "bin") | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Configure Flutter
+        shell: pwsh
+        run: |
+          flutter config --enable-windows-desktop
+          flutter doctor -v
+          flutter pub get
+
+      - name: Analyze and test
+        shell: pwsh
+        run: |
+          flutter analyze
+          flutter test
+
+      - name: Install FFmpeg
+        shell: pwsh
+        run: choco install ffmpeg --yes --no-progress
+
+      - name: Build transferable Windows package
+        shell: pwsh
+        run: |
+          $ffmpeg = Get-ChildItem `
+            -Path (Join-Path $env:ChocolateyInstall "lib\ffmpeg\tools") `
+            -Filter "ffmpeg.exe" `
+            -File `
+            -Recurse | Select-Object -First 1
+          if (-not $ffmpeg) {
+            throw "Could not locate the FFmpeg executable installed by Chocolatey."
+          }
+          .\scripts\Package-Windows.ps1 -FfmpegPath $ffmpeg.FullName
+
+      - name: Upload Windows ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: ChurchStreamer-Windows-x64
+          path: dist/ChurchStreamer-Windows-x64.zip
+          if-no-files-found: error
+          retention-days: 14

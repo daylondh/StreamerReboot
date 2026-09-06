@@ -1731,7 +1731,7 @@ class _GoLiveBar extends StatelessWidget {
     RecordingLifecycleStage.recording => 'Recording ${event.detail}',
     RecordingLifecycleStage.switchingCamera => 'Switching to ${event.detail}…',
     RecordingLifecycleStage.stopping => 'Finishing recording…',
-    RecordingLifecycleStage.finalizing => 'Combining camera changes…',
+    RecordingLifecycleStage.finalizing => 'Finalizing stream and recording…',
     RecordingLifecycleStage.recordingSaved => 'Saved ${event.detail}',
     RecordingLifecycleStage.stopped => event.detail,
   };
