@@ -50,7 +50,7 @@ class FfmpegStreamEngine extends ChangeNotifier
   final List<String> _stderr = [];
   final List<String> _transportDiagnostics = [];
   final List<StreamSubscription<Uint8List>> _audioSubscriptions = [];
-  final Map<AudioSource, _PcmQueue> _audioQueues = {};
+  final Map<AudioSource, PcmQueue> _audioQueues = {};
 
   FfmpegAvailability _ffmpegAvailability = FfmpegAvailability.checking;
   Process? _process;
@@ -71,6 +71,7 @@ class FfmpegStreamEngine extends ChangeNotifier
   DateTime? _fadeStartedAt;
   bool _fadingToSlate = false;
   Completer<void>? _startupSlateRelease;
+  Duration _startupSlateDuration = const Duration(seconds: 5);
   StreamSubscription<String>? _stderrSubscription;
   int? _frameWidth;
   int? _frameHeight;
@@ -136,13 +137,16 @@ class FfmpegStreamEngine extends ChangeNotifier
       _pixelFormat = _ffmpegPixelFormat(frame);
       if (session.startupSplashEnabled) {
         _startupSlate = await _renderSlate(
-          title: session.title,
+          title: session.startupSplashShowTitle ? session.title : null,
           additionalText: session.startupText,
+          backgroundPath: session.startupSplashBackgroundPath,
         );
       }
       if (session.shutdownSplashEnabled) {
         _shutdownSlate = await _renderSlate(
+          title: session.shutdownSplashShowTitle ? session.title : null,
           additionalText: session.shutdownText,
+          backgroundPath: session.shutdownSplashBackgroundPath,
         );
       }
 
@@ -160,9 +164,12 @@ class FfmpegStreamEngine extends ChangeNotifier
         width: frame.width,
         height: frame.height,
         pixelFormat: _pixelFormat!,
-        videoEncoder: _defaultVideoEncoder,
+        videoEncoder: _videoEncoder(session.encoderPreference),
         ingestionUrl: target,
         outputPath: _outputPath,
+        outputResolution: session.outputResolution,
+        videoBitrate: session.videoBitrate.kbps,
+        frameRate: session.frameRate.value,
       );
       final process = await _processStarter(arguments);
       _process = process;
@@ -187,7 +194,10 @@ class FfmpegStreamEngine extends ChangeNotifier
       final startupSlate = _startupSlate;
       if (startupSlate != null) {
         _startupSlateRelease = Completer<void>();
-        unawaited(_playStartupSlate(startupSlate));
+        _startupSlateDuration = Duration(
+          seconds: session.startupSplashDurationSeconds,
+        );
+        unawaited(_playStartupSlate(startupSlate, _startupSlateDuration));
       }
 
       final earlyExit = await Future.any<Object?>([
@@ -254,7 +264,10 @@ class FfmpegStreamEngine extends ChangeNotifier
       final shutdownSlate = _shutdownSlate;
       if (shutdownSlate != null) {
         await _crossfade(shutdownSlate, toSlate: true);
-        await _playSlate(shutdownSlate, const Duration(seconds: 5));
+        await _playSlate(
+          shutdownSlate,
+          Duration(seconds: session.shutdownSplashDurationSeconds),
+        );
       }
       _addEvent(RecordingLifecycleStage.finalizing, 'FFmpeg outputs');
       // End both inputs normally. FFmpeg treats EOF as a graceful end-of-file
@@ -293,10 +306,21 @@ class FfmpegStreamEngine extends ChangeNotifier
     required String videoEncoder,
     required String ingestionUrl,
     String? outputPath,
+    StreamOutputResolution outputResolution = StreamOutputResolution.original,
+    int videoBitrate = 4500,
+    int frameRate = 30,
   }) => [
     '-hide_banner',
     '-loglevel',
     'warning',
+    // The camera's advertised rate is often nominal (for example, "30 fps"
+    // hardware commonly delivers 30000/1001). Timestamp both live inputs from
+    // the same clock so that this small difference cannot accumulate into
+    // audio/video drift over a long service.
+    '-copyts',
+    '-start_at_zero',
+    '-use_wallclock_as_timestamps',
+    '1',
     '-f',
     'rawvideo',
     '-pixel_format',
@@ -304,9 +328,11 @@ class FfmpegStreamEngine extends ChangeNotifier
     '-video_size',
     '${width}x$height',
     '-framerate',
-    '30',
+    '$frameRate',
     '-i',
     'tcp://127.0.0.1:$videoPort',
+    '-use_wallclock_as_timestamps',
+    '1',
     '-f',
     's16le',
     '-ar',
@@ -319,6 +345,14 @@ class FfmpegStreamEngine extends ChangeNotifier
     '0:v:0',
     '-map',
     '1:a:0',
+    '-fps_mode',
+    'cfr',
+    '-r',
+    '$frameRate',
+    if (outputResolution.maxHeight case final height?) ...[
+      '-vf',
+      'scale=-2:min($height\\,ih)',
+    ],
     '-c:v',
     videoEncoder,
     if (videoEncoder == 'h264_videotoolbox') ...[
@@ -328,19 +362,21 @@ class FfmpegStreamEngine extends ChangeNotifier
       '1',
     ],
     '-b:v',
-    '4500k',
+    '${videoBitrate}k',
     '-maxrate',
-    '4500k',
+    '${videoBitrate}k',
     '-bufsize',
-    '9000k',
+    '${videoBitrate * 2}k',
     '-g',
-    '60',
+    '${frameRate * 2}',
     '-keyint_min',
-    '60',
+    '${frameRate * 2}',
     '-pix_fmt',
     'yuv420p',
     '-c:a',
     'aac',
+    '-af',
+    'aresample=async=1000:first_pts=0',
     '-b:a',
     '128k',
     '-ar',
@@ -440,7 +476,7 @@ class FfmpegStreamEngine extends ChangeNotifier
 
   void _startAudioMixer() {
     for (final source in audioSources.sources) {
-      final queue = _PcmQueue();
+      final queue = PcmQueue();
       _audioQueues[source] = queue;
       _audioSubscriptions.add(source.mixedAudio.stream.listen(queue.add));
     }
@@ -484,9 +520,9 @@ class FfmpegStreamEngine extends ChangeNotifier
     }
   }
 
-  Future<void> _playStartupSlate(Uint8List bytes) async {
+  Future<void> _playStartupSlate(Uint8List bytes, Duration duration) async {
     await _playSlateUntil(bytes, _startupSlateRelease!.future);
-    await _playSlate(bytes, const Duration(seconds: 5), keepActive: true);
+    await _playSlate(bytes, duration, keepActive: true);
     await _crossfade(bytes, toSlate: false);
   }
 
@@ -497,7 +533,7 @@ class FfmpegStreamEngine extends ChangeNotifier
     if (!release.isCompleted) release.complete();
     // Keep the splash visible for its full configured program duration after
     // YouTube has made the broadcast visible to viewers.
-    await Future<void>.delayed(const Duration(milliseconds: 5600));
+    await Future<void>.delayed(_startupSlateDuration + _fadeDuration);
     _startupSlateRelease = null;
   }
 
@@ -601,6 +637,7 @@ class FfmpegStreamEngine extends ChangeNotifier
   Future<Uint8List> _renderSlate({
     String? title,
     required String additionalText,
+    required String backgroundPath,
   }) async {
     final width = _frameWidth!;
     final height = _frameHeight!;
@@ -610,6 +647,43 @@ class FfmpegStreamEngine extends ChangeNotifier
       ui.Rect.fromLTWH(0, 0, width.toDouble(), height.toDouble()),
       ui.Paint()..color = const ui.Color(0xff050f13),
     );
+    if (backgroundPath.isNotEmpty) {
+      try {
+        final imageBytes = await File(backgroundPath).readAsBytes();
+        final codec = await ui.instantiateImageCodec(imageBytes);
+        final frame = await codec.getNextFrame();
+        final background = frame.image;
+        final sourceAspect = background.width / background.height;
+        final targetAspect = width / height;
+        final sourceRect = sourceAspect > targetAspect
+            ? ui.Rect.fromLTWH(
+                (background.width - background.height * targetAspect) / 2,
+                0,
+                background.height * targetAspect,
+                background.height.toDouble(),
+              )
+            : ui.Rect.fromLTWH(
+                0,
+                (background.height - background.width / targetAspect) / 2,
+                background.width.toDouble(),
+                background.width / targetAspect,
+              );
+        canvas.drawImageRect(
+          background,
+          sourceRect,
+          ui.Rect.fromLTWH(0, 0, width.toDouble(), height.toDouble()),
+          ui.Paint(),
+        );
+        background.dispose();
+        codec.dispose();
+        canvas.drawRect(
+          ui.Rect.fromLTWH(0, 0, width.toDouble(), height.toDouble()),
+          ui.Paint()..color = const ui.Color(0x66000000),
+        );
+      } catch (error) {
+        debugPrint('[Splash] Could not load background image: $error');
+      }
+    }
 
     final content = [
       if (title != null && title.trim().isNotEmpty) title.trim(),
@@ -869,38 +943,87 @@ class FfmpegStreamEngine extends ChangeNotifier
     if (Platform.isWindows) return 'h264_mf';
     return 'libx264';
   }
+
+  static String _videoEncoder(VideoEncoderPreference preference) {
+    if (preference == VideoEncoderPreference.software) return 'libx264';
+    return _defaultVideoEncoder;
+  }
 }
 
-class _PcmQueue {
-  final Queue<int> _bytes = Queue<int>();
+/// A bounded PCM buffer used between recorder callbacks and the 20 ms mixer.
+///
+/// Recorder callbacks and Dart timers do not run at perfectly matching rates.
+/// Keeping every surplus byte makes a tiny clock mismatch grow for the entire
+/// stream, and `Queue<int>` magnifies that into substantial heap pressure. Store
+/// whole chunks and discard the oldest audio once the useful delay window plus
+/// jitter headroom has been exceeded.
+@visibleForTesting
+class PcmQueue {
+  PcmQueue({this.maxBufferBytes = 192000});
+
+  final int maxBufferBytes;
+  final Queue<Uint8List> _chunks = Queue<Uint8List>();
+  int _headOffset = 0;
+  int _length = 0;
   int _bufferedDelayBytes = 0;
 
-  void add(Uint8List bytes) => _bytes.addAll(bytes);
+  int get length => _length;
+
+  void add(Uint8List bytes) {
+    if (bytes.isEmpty) return;
+    _chunks.add(bytes);
+    _length += bytes.length;
+    _discard(_length - maxBufferBytes);
+  }
 
   Uint8List take(int count) {
     final output = Uint8List(count);
-    for (var index = 0; index < count && _bytes.isNotEmpty; index++) {
-      output[index] = _bytes.removeFirst();
+    var outputOffset = 0;
+    while (outputOffset < count && _chunks.isNotEmpty) {
+      final chunk = _chunks.first;
+      final available = chunk.length - _headOffset;
+      final copied = math.min(count - outputOffset, available);
+      output.setRange(outputOffset, outputOffset + copied, chunk, _headOffset);
+      outputOffset += copied;
+      _headOffset += copied;
+      _length -= copied;
+      if (_headOffset == chunk.length) {
+        _chunks.removeFirst();
+        _headOffset = 0;
+      }
     }
     return output;
   }
 
   Uint8List takeDelayed(int count, int delayBytes) {
     if (delayBytes < _bufferedDelayBytes) {
-      var discard = math.min(_bufferedDelayBytes - delayBytes, _bytes.length);
-      while (discard-- > 0) {
-        _bytes.removeFirst();
-      }
+      _discard(_bufferedDelayBytes - delayBytes);
       _bufferedDelayBytes = delayBytes;
     } else if (delayBytes > _bufferedDelayBytes) {
       // Emit silence only while intentionally growing the delay buffer. Once
       // primed, consume whatever capture supplied this tick, just as the
       // original non-delayed mixer did, instead of converting input jitter to
       // repeated 20 ms gaps.
-      if (_bytes.length < delayBytes + count) return Uint8List(count);
+      if (_length < delayBytes + count) return Uint8List(count);
       _bufferedDelayBytes = delayBytes;
     }
     return take(count);
+  }
+
+  void _discard(int count) {
+    var remaining = math.min(math.max(count, 0), _length);
+    while (remaining > 0 && _chunks.isNotEmpty) {
+      final chunk = _chunks.first;
+      final available = chunk.length - _headOffset;
+      final discarded = math.min(remaining, available);
+      _headOffset += discarded;
+      _length -= discarded;
+      remaining -= discarded;
+      if (_headOffset == chunk.length) {
+        _chunks.removeFirst();
+        _headOffset = 0;
+      }
+    }
   }
 }
 

@@ -23,10 +23,21 @@ class StreamController extends ChangeNotifier {
     _session = _session.copyWith(
       startupSplashEnabled: settings.startupSplashEnabled,
       shutdownSplashEnabled: settings.shutdownSplashEnabled,
+      startupSplashShowTitle: settings.startupSplashShowTitle,
+      shutdownSplashShowTitle: settings.shutdownSplashShowTitle,
+      startupSplashDurationSeconds: settings.startupSplashDurationSeconds,
+      shutdownSplashDurationSeconds: settings.shutdownSplashDurationSeconds,
+      startupSplashBackgroundPath: settings.startupSplashBackgroundPath,
+      shutdownSplashBackgroundPath: settings.shutdownSplashBackgroundPath,
       privacy: settings.privacy,
       recordLocally: settings.recordLocally,
       recordingDirectory: settings.recordingDirectory,
       cameraName: settings.cameraName,
+      outputResolution: settings.outputResolution,
+      videoBitrate: settings.videoBitrate,
+      frameRate: settings.frameRate,
+      captureResolution: settings.captureResolution,
+      encoderPreference: settings.encoderPreference,
       startupText: settings.startupText,
       shutdownText: settings.shutdownText,
     );
@@ -68,6 +79,38 @@ class StreamController extends ChangeNotifier {
     _saveSettings();
   }
 
+  void updateOutputResolution(StreamOutputResolution value) {
+    if (_session.isLive || _session.isBusy) return;
+    _session = _session.copyWith(outputResolution: value, clearError: true);
+    notifyListeners();
+    _saveSettings();
+  }
+
+  void updateVideoBitrate(StreamVideoBitrate value) => _updateTechnicalSettings(
+    _session.copyWith(videoBitrate: value, clearError: true),
+  );
+
+  void updateFrameRate(StreamFrameRate value) => _updateTechnicalSettings(
+    _session.copyWith(frameRate: value, clearError: true),
+  );
+
+  void updateCaptureResolution(CameraCaptureResolution value) =>
+      _updateTechnicalSettings(
+        _session.copyWith(captureResolution: value, clearError: true),
+      );
+
+  void updateEncoderPreference(VideoEncoderPreference value) =>
+      _updateTechnicalSettings(
+        _session.copyWith(encoderPreference: value, clearError: true),
+      );
+
+  void _updateTechnicalSettings(StreamSession updated) {
+    if (_session.isLive || _session.isBusy) return;
+    _session = updated;
+    notifyListeners();
+    _saveSettings();
+  }
+
   void updateStartupText(String value) {
     _session = _session.copyWith(startupText: value, clearError: true);
     notifyListeners();
@@ -95,15 +138,52 @@ class StreamController extends ChangeNotifier {
     _saveSettings();
   }
 
+  void updateSplashSettings({
+    required bool startupEnabled,
+    required bool shutdownEnabled,
+    required bool startupShowTitle,
+    required bool shutdownShowTitle,
+    required int startupDurationSeconds,
+    required int shutdownDurationSeconds,
+    required String startupBackgroundPath,
+    required String shutdownBackgroundPath,
+  }) {
+    if (_session.isLive || _session.isBusy) return;
+    _session = _session.copyWith(
+      startupSplashEnabled: startupEnabled,
+      shutdownSplashEnabled: shutdownEnabled,
+      startupSplashShowTitle: startupShowTitle,
+      shutdownSplashShowTitle: shutdownShowTitle,
+      startupSplashDurationSeconds: startupDurationSeconds,
+      shutdownSplashDurationSeconds: shutdownDurationSeconds,
+      startupSplashBackgroundPath: startupBackgroundPath,
+      shutdownSplashBackgroundPath: shutdownBackgroundPath,
+      clearError: true,
+    );
+    notifyListeners();
+    _saveSettings();
+  }
+
   Future<void> _saveSettings() async {
     await settingsStore?.save(
       StreamTextSettings(
         startupSplashEnabled: _session.startupSplashEnabled,
         shutdownSplashEnabled: _session.shutdownSplashEnabled,
+        startupSplashShowTitle: _session.startupSplashShowTitle,
+        shutdownSplashShowTitle: _session.shutdownSplashShowTitle,
+        startupSplashDurationSeconds: _session.startupSplashDurationSeconds,
+        shutdownSplashDurationSeconds: _session.shutdownSplashDurationSeconds,
+        startupSplashBackgroundPath: _session.startupSplashBackgroundPath,
+        shutdownSplashBackgroundPath: _session.shutdownSplashBackgroundPath,
         privacy: _session.privacy,
         recordLocally: _session.recordLocally,
         recordingDirectory: _session.recordingDirectory,
         cameraName: _session.cameraName,
+        outputResolution: _session.outputResolution,
+        videoBitrate: _session.videoBitrate,
+        frameRate: _session.frameRate,
+        captureResolution: _session.captureResolution,
+        encoderPreference: _session.encoderPreference,
         startupText: _session.startupText,
         shutdownText: _session.shutdownText,
       ),
@@ -200,8 +280,19 @@ class StreamController extends ChangeNotifier {
         recordLocally: _session.recordLocally,
         recordingDirectory: _session.recordingDirectory,
         cameraName: _session.cameraName,
+        outputResolution: _session.outputResolution,
+        videoBitrate: _session.videoBitrate,
+        frameRate: _session.frameRate,
+        captureResolution: _session.captureResolution,
+        encoderPreference: _session.encoderPreference,
         startupSplashEnabled: _session.startupSplashEnabled,
         shutdownSplashEnabled: _session.shutdownSplashEnabled,
+        startupSplashShowTitle: _session.startupSplashShowTitle,
+        shutdownSplashShowTitle: _session.shutdownSplashShowTitle,
+        startupSplashDurationSeconds: _session.startupSplashDurationSeconds,
+        shutdownSplashDurationSeconds: _session.shutdownSplashDurationSeconds,
+        startupSplashBackgroundPath: _session.startupSplashBackgroundPath,
+        shutdownSplashBackgroundPath: _session.shutdownSplashBackgroundPath,
         startupText: _session.startupText,
         shutdownText: _session.shutdownText,
       );

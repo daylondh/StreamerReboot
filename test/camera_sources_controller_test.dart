@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:streamer_reboot/controllers/camera_sources_controller.dart';
+import 'package:streamer_reboot/domain/stream_session.dart';
 
 const camera = CameraDescription(
   name: 'HDMI capture',
@@ -50,7 +51,8 @@ void main() {
       final attempts = <FakeCamera>[];
       final sources = CameraSourcesController(
         listCameras: () async => [camera],
-        createCamera: (_, preset) {
+        createCamera: (_, preset, fps) {
+          expect(fps, 30);
           if (attempts.isNotEmpty) expect(attempts.last.disposed, isTrue);
           final next = FakeCamera(preset, attempts.isEmpty ? failure : null);
           attempts.add(next);
@@ -73,4 +75,28 @@ void main() {
       sources.dispose();
     });
   }
+
+  test('uses configured capture resolution and frame rate', () async {
+    ResolutionPreset? selectedPreset;
+    int? selectedFps;
+    final sources = CameraSourcesController(
+      listCameras: () async => [camera],
+      createCamera: (_, preset, fps) {
+        selectedPreset = preset;
+        selectedFps = fps;
+        return FakeCamera(preset, null);
+      },
+    );
+    sources.configure(
+      captureResolution: CameraCaptureResolution.p1080,
+      frameRate: StreamFrameRate.fps60,
+    );
+
+    await sources.discover();
+
+    expect(selectedPreset, ResolutionPreset.veryHigh);
+    expect(selectedFps, 60);
+    await sources.release();
+    sources.dispose();
+  });
 }

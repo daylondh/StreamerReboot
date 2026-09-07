@@ -1,7 +1,30 @@
+import 'dart:typed_data';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:streamer_reboot/services/ffmpeg_stream_engine.dart';
+import 'package:streamer_reboot/domain/stream_session.dart';
 
 void main() {
+  test('PCM queue stays bounded during a long-running capture', () {
+    final queue = PcmQueue(maxBufferBytes: 8);
+
+    queue.add(Uint8List.fromList([1, 2, 3, 4, 5, 6]));
+    queue.add(Uint8List.fromList([7, 8, 9, 10, 11, 12]));
+
+    expect(queue.length, 8);
+    expect(queue.take(8), [5, 6, 7, 8, 9, 10, 11, 12]);
+  });
+
+  test('PCM queue preserves silence while an audio delay is priming', () {
+    final queue = PcmQueue(maxBufferBytes: 32);
+    queue.add(Uint8List.fromList([1, 2, 3, 4]));
+
+    expect(queue.takeDelayed(2, 4), [0, 0]);
+    expect(queue.length, 4);
+    queue.add(Uint8List.fromList([5, 6]));
+    expect(queue.takeDelayed(2, 4), [1, 2]);
+  });
+
   test('preserves 4K capture dimensions in the Windows encoder input', () {
     final arguments = FfmpegStreamEngine.buildArguments(
       videoPort: 41001,
@@ -79,4 +102,65 @@ void main() {
     );
     expect(arguments.last, isNot(contains('[f=mp4')));
   });
+
+  test('adds an aspect-preserving FFmpeg downscale filter', () {
+    final arguments = FfmpegStreamEngine.buildArguments(
+      videoPort: 41001,
+      audioPort: 41002,
+      width: 3840,
+      height: 2160,
+      pixelFormat: 'bgra',
+      videoEncoder: 'h264_mf',
+      ingestionUrl: 'rtmps://youtube.example/live/key',
+      outputResolution: StreamOutputResolution.p1080,
+    );
+
+    expect(arguments, containsAllInOrder(['-vf', r'scale=-2:min(1080\,ih)']));
+  });
+
+  test('applies selected bitrate and frame rate to FFmpeg', () {
+    final arguments = FfmpegStreamEngine.buildArguments(
+      videoPort: 41001,
+      audioPort: 41002,
+      width: 1920,
+      height: 1080,
+      pixelFormat: 'bgra',
+      videoEncoder: 'libx264',
+      ingestionUrl: 'rtmps://youtube.example/live/key',
+      videoBitrate: 6000,
+      frameRate: 24,
+    );
+
+    expect(arguments, containsAllInOrder(['-framerate', '24']));
+    expect(arguments, containsAllInOrder(['-fps_mode', 'cfr', '-r', '24']));
+    expect(arguments, containsAllInOrder(['-b:v', '6000k']));
+    expect(arguments, containsAllInOrder(['-maxrate', '6000k']));
+    expect(arguments, containsAllInOrder(['-bufsize', '12000k']));
+    expect(arguments, containsAllInOrder(['-g', '48']));
+  });
+
+  test(
+    'uses a shared wall clock and async audio correction to prevent drift',
+    () {
+      final arguments = FfmpegStreamEngine.buildArguments(
+        videoPort: 41001,
+        audioPort: 41002,
+        width: 1920,
+        height: 1080,
+        pixelFormat: 'bgra',
+        videoEncoder: 'libx264',
+        ingestionUrl: 'rtmps://youtube.example/live/key',
+      );
+
+      expect(arguments, containsAllInOrder(['-copyts', '-start_at_zero']));
+      expect(
+        arguments.where((value) => value == '-use_wallclock_as_timestamps'),
+        hasLength(2),
+      );
+      expect(
+        arguments,
+        containsAllInOrder(['-af', 'aresample=async=1000:first_pts=0']),
+      );
+    },
+  );
 }

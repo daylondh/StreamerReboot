@@ -5,6 +5,7 @@ import 'package:streamer_reboot/app.dart';
 import 'package:streamer_reboot/controllers/audio_sources_controller.dart';
 import 'package:streamer_reboot/controllers/camera_sources_controller.dart';
 import 'package:streamer_reboot/controllers/stream_controller.dart';
+import 'package:streamer_reboot/domain/stream_session.dart';
 import 'package:streamer_reboot/services/ffmpeg_stream_engine.dart';
 import 'package:streamer_reboot/services/youtube_live_service.dart';
 
@@ -55,6 +56,32 @@ void main() {
         ),
       ),
     );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('application-settings')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('stream-quality-settings')), findsOneWidget);
+    expect(find.byKey(const Key('device-settings')), findsOneWidget);
+    expect(find.byKey(const Key('splash-settings')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('stream-quality-settings')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('output-resolution')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('output-resolution')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('720p').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+    await tester.pumpAndSettle();
+    expect(controller.session.outputResolution, StreamOutputResolution.p720);
+    await tester.tap(find.byKey(const Key('splash-settings')));
+    await tester.pumpAndSettle();
+    expect(find.text('Startup splash'), findsOneWidget);
+    expect(find.text('Shutdown splash'), findsOneWidget);
+    expect(find.text('Show stream name'), findsNWidgets(2));
+    expect(find.text('Background image'), findsNWidgets(2));
+    await tester.tap(find.text('Back'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Close'));
     await tester.pumpAndSettle();
 
     for (final key in ['service-title', 'startup-text', 'shutdown-text']) {

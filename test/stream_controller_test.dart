@@ -173,10 +173,21 @@ void main() {
       const StreamTextSettings(
         startupSplashEnabled: false,
         shutdownSplashEnabled: true,
+        startupSplashShowTitle: false,
+        shutdownSplashShowTitle: true,
+        startupSplashDurationSeconds: 10,
+        shutdownSplashDurationSeconds: 15,
+        startupSplashBackgroundPath: '/images/start.jpg',
+        shutdownSplashBackgroundPath: '/images/end.png',
         privacy: ServicePrivacy.private,
         recordLocally: false,
         recordingDirectory: '/recordings/original',
         cameraName: 'Sanctuary wide',
+        outputResolution: StreamOutputResolution.p720,
+        videoBitrate: StreamVideoBitrate.high,
+        frameRate: StreamFrameRate.fps24,
+        captureResolution: CameraCaptureResolution.p1080,
+        encoderPreference: VideoEncoderPreference.software,
         startupText: 'Welcome to worship.',
         shutdownText: 'Have a blessed week.',
       ),
@@ -185,10 +196,21 @@ void main() {
     await first.initialize();
     expect(first.session.startupSplashEnabled, isFalse);
     expect(first.session.shutdownSplashEnabled, isTrue);
+    expect(first.session.startupSplashShowTitle, isFalse);
+    expect(first.session.shutdownSplashShowTitle, isTrue);
+    expect(first.session.startupSplashDurationSeconds, 10);
+    expect(first.session.shutdownSplashDurationSeconds, 15);
+    expect(first.session.startupSplashBackgroundPath, '/images/start.jpg');
+    expect(first.session.shutdownSplashBackgroundPath, '/images/end.png');
     expect(first.session.privacy, ServicePrivacy.private);
     expect(first.session.recordLocally, isFalse);
     expect(first.session.recordingDirectory, '/recordings/original');
     expect(first.session.cameraName, 'Sanctuary wide');
+    expect(first.session.outputResolution, StreamOutputResolution.p720);
+    expect(first.session.videoBitrate, StreamVideoBitrate.high);
+    expect(first.session.frameRate, StreamFrameRate.fps24);
+    expect(first.session.captureResolution, CameraCaptureResolution.p1080);
+    expect(first.session.encoderPreference, VideoEncoderPreference.software);
     expect(first.session.startupText, 'Welcome to worship.');
     expect(first.session.shutdownText, 'Have a blessed week.');
 
@@ -196,8 +218,23 @@ void main() {
     first.updateShutdownText('See you next Sunday.');
     first.updateStartupSplashEnabled(true);
     first.updateShutdownSplashEnabled(false);
+    first.updateSplashSettings(
+      startupEnabled: true,
+      shutdownEnabled: false,
+      startupShowTitle: true,
+      shutdownShowTitle: false,
+      startupDurationSeconds: 3,
+      shutdownDurationSeconds: 5,
+      startupBackgroundPath: '/images/new-start.png',
+      shutdownBackgroundPath: '',
+    );
     first.updatePrivacy(ServicePrivacy.public);
     first.updateRecording(true);
+    first.updateOutputResolution(StreamOutputResolution.p480);
+    first.updateVideoBitrate(StreamVideoBitrate.low);
+    first.updateFrameRate(StreamFrameRate.fps60);
+    first.updateCaptureResolution(CameraCaptureResolution.p720);
+    first.updateEncoderPreference(VideoEncoderPreference.hardware);
     first.updateTitle('One-time custom stream name');
     await first.selectCamera('Lectern close-up');
     first.updateRecordingDirectory('/recordings/new');
@@ -211,10 +248,21 @@ void main() {
     await second.initialize();
     expect(second.session.startupSplashEnabled, isTrue);
     expect(second.session.shutdownSplashEnabled, isFalse);
+    expect(second.session.startupSplashShowTitle, isTrue);
+    expect(second.session.shutdownSplashShowTitle, isFalse);
+    expect(second.session.startupSplashDurationSeconds, 3);
+    expect(second.session.shutdownSplashDurationSeconds, 5);
+    expect(second.session.startupSplashBackgroundPath, '/images/new-start.png');
+    expect(second.session.shutdownSplashBackgroundPath, isEmpty);
     expect(second.session.privacy, ServicePrivacy.public);
     expect(second.session.recordLocally, isTrue);
     expect(second.session.recordingDirectory, '/recordings/new');
     expect(second.session.cameraName, 'Lectern close-up');
+    expect(second.session.outputResolution, StreamOutputResolution.p480);
+    expect(second.session.videoBitrate, StreamVideoBitrate.low);
+    expect(second.session.frameRate, StreamFrameRate.fps60);
+    expect(second.session.captureResolution, CameraCaptureResolution.p720);
+    expect(second.session.encoderPreference, VideoEncoderPreference.hardware);
     expect(second.session.startupText, 'Starting soon.');
     expect(second.session.shutdownText, 'See you next Sunday.');
     expect(

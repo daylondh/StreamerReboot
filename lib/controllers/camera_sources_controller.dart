@@ -4,6 +4,15 @@ import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../domain/stream_session.dart';
+
+typedef CameraFactory =
+    CameraController Function(
+      CameraDescription description,
+      ResolutionPreset preset,
+      int fps,
+    );
+
 class CameraSource {
   CameraSource({required this.description, this.controller, this.error});
   final CameraDescription description;
@@ -16,19 +25,28 @@ class CameraSource {
 class CameraSourcesController extends ChangeNotifier {
   CameraSourcesController({
     Future<List<CameraDescription>> Function()? listCameras,
-    CameraController Function(CameraDescription, ResolutionPreset)?
-    createCamera,
+    CameraFactory? createCamera,
   }) : _listCameras = listCameras ?? availableCameras,
        _createCamera = createCamera ?? _defaultCamera;
 
   final Future<List<CameraDescription>> Function() _listCameras;
-  final CameraController Function(CameraDescription, ResolutionPreset)
-  _createCamera;
+  final CameraFactory _createCamera;
+  CameraCaptureResolution captureResolution = CameraCaptureResolution.automatic;
+  StreamFrameRate frameRate = StreamFrameRate.fps30;
 
   static CameraController _defaultCamera(
     CameraDescription description,
     ResolutionPreset preset,
-  ) => CameraController(description, preset, enableAudio: true, fps: 30);
+    int fps,
+  ) => CameraController(description, preset, enableAudio: true, fps: fps);
+
+  void configure({
+    required CameraCaptureResolution captureResolution,
+    required StreamFrameRate frameRate,
+  }) {
+    this.captureResolution = captureResolution;
+    this.frameRate = frameRate;
+  }
 
   static const _settingsKey = 'camera.feedDelays';
   final List<CameraSource> _sources = [];
@@ -108,8 +126,15 @@ class CameraSourcesController extends ChangeNotifier {
   }
 
   Future<void> _initialize(CameraSource source) async {
-    await _initializeWithPreset(source, ResolutionPreset.high);
+    final preset = switch (captureResolution) {
+      CameraCaptureResolution.automatic => ResolutionPreset.high,
+      CameraCaptureResolution.p720 => ResolutionPreset.high,
+      CameraCaptureResolution.p1080 => ResolutionPreset.veryHigh,
+      CameraCaptureResolution.maximum => ResolutionPreset.max,
+    };
+    await _initializeWithPreset(source, preset);
     if (defaultTargetPlatform == TargetPlatform.windows &&
+        captureResolution == CameraCaptureResolution.automatic &&
         (source.error?.contains('Failed to enumerate camera media types') ??
             false)) {
       // Some HDMI capture adapters expose only modes above the Windows
@@ -131,7 +156,11 @@ class CameraSourcesController extends ChangeNotifier {
     ResolutionPreset preset,
   ) async {
     source.error = null;
-    final controller = _createCamera(source.description, preset);
+    final controller = _createCamera(
+      source.description,
+      preset,
+      frameRate.value,
+    );
     source.controller = controller;
     try {
       await controller.initialize();
