@@ -11,6 +11,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../controllers/audio_sources_controller.dart';
 import '../domain/stream_session.dart';
+import 'app_log.dart';
 import 'stream_engine.dart';
 
 typedef CameraControllerResolver = CameraController? Function(String name);
@@ -180,7 +181,7 @@ class FfmpegStreamEngine extends ChangeNotifier
             final diagnostic = _sanitizeDiagnostic(line);
             _stderr.add(diagnostic);
             if (_stderr.length > 30) _stderr.removeAt(0);
-            debugPrint('[FFmpeg] $diagnostic');
+            logMessage('[FFmpeg] $diagnostic');
           });
       _videoSocket = await videoConnection.timeout(const Duration(seconds: 5));
       _audioSocket = await audioConnection.timeout(const Duration(seconds: 5));
@@ -233,7 +234,7 @@ class FfmpegStreamEngine extends ChangeNotifier
       await next.startImageStream((frame) {
         if (!describedFormat) {
           describedFormat = true;
-          debugPrint(
+          logMessage(
             '[FFmpeg] Switched camera frame ${frame.width}x${frame.height} '
             '(${_cameraPixelFormat(frame)}); normalizing to '
             '${_frameWidth}x$_frameHeight ($_pixelFormat)',
@@ -263,11 +264,19 @@ class FfmpegStreamEngine extends ChangeNotifier
     try {
       final shutdownSlate = _shutdownSlate;
       if (shutdownSlate != null) {
+        logMessage(
+          '[Splash] Starting ${session.shutdownSplashDurationSeconds}s '
+          'shutdown splash.',
+        );
         await _crossfade(shutdownSlate, toSlate: true);
         await _playSlate(
           shutdownSlate,
           Duration(seconds: session.shutdownSplashDurationSeconds),
         );
+        await _flushVideoFeed();
+        logMessage('[Splash] Shutdown splash delivered to FFmpeg.');
+      } else {
+        logMessage('[Splash] Shutdown splash is disabled.');
       }
       _addEvent(RecordingLifecycleStage.finalizing, 'FFmpeg outputs');
       // End both inputs normally. FFmpeg treats EOF as a graceful end-of-file
@@ -314,11 +323,9 @@ class FfmpegStreamEngine extends ChangeNotifier
     '-loglevel',
     'warning',
     // The camera's advertised rate is often nominal (for example, "30 fps"
-    // hardware commonly delivers 30000/1001). Timestamp both live inputs from
-    // the same clock so that this small difference cannot accumulate into
-    // audio/video drift over a long service.
-    '-copyts',
-    '-start_at_zero',
+    // hardware commonly delivers 30000/1001). Timestamp video from its arrival
+    // clock so that this small difference cannot accumulate into long-term
+    // drift. The video filter resets the epoch-based timestamps to zero.
     '-use_wallclock_as_timestamps',
     '1',
     '-f',
@@ -331,8 +338,6 @@ class FfmpegStreamEngine extends ChangeNotifier
     '$frameRate',
     '-i',
     'tcp://127.0.0.1:$videoPort',
-    '-use_wallclock_as_timestamps',
-    '1',
     '-f',
     's16le',
     '-ar',
@@ -345,14 +350,24 @@ class FfmpegStreamEngine extends ChangeNotifier
     '0:v:0',
     '-map',
     '1:a:0',
+    '-vf',
+    [
+      'setpts=PTS-STARTPTS',
+      // Match the fill-style camera preview and YouTube's 16:9 player by
+      // center-cropping non-widescreen sources instead of letterboxing them.
+      'crop=trunc(min(iw\\,ih*16/9)/2)*2:'
+          'trunc(min(ih\\,iw*9/16)/2)*2',
+      if (outputResolution case StreamOutputResolution(
+        width: final width?,
+        height: final height?,
+      ))
+        'scale=$width:$height',
+      'setsar=1',
+    ].join(','),
     '-fps_mode',
     'cfr',
     '-r',
     '$frameRate',
-    if (outputResolution.maxHeight case final height?) ...[
-      '-vf',
-      'scale=-2:min($height\\,ih)',
-    ],
     '-c:v',
     videoEncoder,
     if (videoEncoder == 'h264_videotoolbox') ...[
@@ -375,8 +390,6 @@ class FfmpegStreamEngine extends ChangeNotifier
     'yuv420p',
     '-c:a',
     'aac',
-    '-af',
-    'aresample=async=1000:first_pts=0',
     '-b:a',
     '128k',
     '-ar',
@@ -681,7 +694,7 @@ class FfmpegStreamEngine extends ChangeNotifier
           ui.Paint()..color = const ui.Color(0x66000000),
         );
       } catch (error) {
-        debugPrint('[Splash] Could not load background image: $error');
+        logMessage('[Splash] Could not load background image: $error');
       }
     }
 
@@ -741,7 +754,7 @@ class FfmpegStreamEngine extends ChangeNotifier
     _transportError ??= error;
     final message = _sanitizeDiagnostic('$channel transport: $error');
     _transportDiagnostics.add(message);
-    debugPrint('[FFmpeg transport] $message');
+    logMessage('[FFmpeg transport] $message');
     if (_transportDiagnostics.length > 10) {
       _transportDiagnostics.removeAt(0);
     }
@@ -804,7 +817,7 @@ class FfmpegStreamEngine extends ChangeNotifier
     try {
       await socket.close().timeout(_cleanupTimeout);
     } on TimeoutException {
-      debugPrint(
+      logMessage(
         '[FFmpeg cleanup] $resource did not finish within '
         '${_cleanupTimeout.inSeconds} seconds; forcing it closed.',
       );
@@ -815,12 +828,27 @@ class FfmpegStreamEngine extends ChangeNotifier
     }
   }
 
+  Future<void> _flushVideoFeed() async {
+    final socket = _videoSocket;
+    if (socket == null) return;
+    try {
+      await socket.flush().timeout(const Duration(seconds: 15));
+    } on TimeoutException {
+      logMessage(
+        '[Splash] Video feed did not drain within 15 seconds; '
+        'continuing shutdown.',
+      );
+    } catch (error) {
+      logMessage('[Splash] Could not flush shutdown video: $error');
+    }
+  }
+
   Future<void> _ignoreCleanup(Future<void>? operation, String resource) async {
     if (operation == null) return;
     try {
       await operation.timeout(_cleanupTimeout);
     } on TimeoutException {
-      debugPrint(
+      logMessage(
         '[FFmpeg cleanup] $resource did not finish within '
         '${_cleanupTimeout.inSeconds} seconds; continuing shutdown.',
       );
@@ -897,7 +925,7 @@ class FfmpegStreamEngine extends ChangeNotifier
         Object error,
         StackTrace stackTrace,
       ) {
-        debugPrint('FFmpeg teardown failed: $error');
+        logMessage('FFmpeg teardown failed: $error');
       }),
     );
     super.dispose();

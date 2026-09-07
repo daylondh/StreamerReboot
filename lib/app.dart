@@ -12,6 +12,7 @@ import 'controllers/camera_sources_controller.dart';
 import 'controllers/stream_controller.dart';
 import 'domain/stream_session.dart';
 import 'services/media_permission_service.dart';
+import 'services/app_log.dart';
 import 'services/ffmpeg_stream_engine.dart';
 import 'services/stream_engine.dart';
 import 'services/stream_settings_store.dart';
@@ -419,12 +420,12 @@ class _StreamDashboardState extends State<StreamDashboard> {
     try {
       await widget.controller.shutdown();
     } catch (error) {
-      debugPrint('Stream cleanup during quit failed: $error');
+      logMessage('Stream cleanup during quit failed: $error');
     }
     try {
       await Future.wait([_cameraSources.release(), _audioSources.release()]);
     } catch (error) {
-      debugPrint('Media resource cleanup during quit failed: $error');
+      logMessage('Media resource cleanup during quit failed: $error');
     }
 
     await SystemNavigator.pop();
@@ -457,6 +458,8 @@ class _StreamDashboardState extends State<StreamDashboard> {
                   isQuitting: _isQuitting,
                   settingsEnabled: !session.isLive && !session.isBusy,
                 ),
+                const SizedBox(height: 10),
+                _SupportContactBanner(session: session),
                 const SizedBox(height: 18),
                 Expanded(
                   child: LayoutBuilder(
@@ -515,6 +518,33 @@ class _StreamDashboardState extends State<StreamDashboard> {
       );
     },
   );
+}
+
+class _SupportContactBanner extends StatelessWidget {
+  const _SupportContactBanner({required this.session});
+
+  final StreamSession session;
+
+  @override
+  Widget build(BuildContext context) {
+    final name = session.supportContactName.isEmpty
+        ? '<name>'
+        : session.supportContactName;
+    final phone = session.supportContactPhone.isEmpty
+        ? '<phone number>'
+        : session.supportContactPhone;
+    return Semantics(
+      label: 'Software support contact',
+      child: Text(
+        'If you have any problems with this software, contact $name at $phone',
+        key: const Key('support-contact-message'),
+        textAlign: TextAlign.center,
+        style: Theme.of(
+          context,
+        ).textTheme.bodySmall?.copyWith(color: Colors.black54),
+      ),
+    );
+  }
 }
 
 enum _SettingsPage { root, streamQuality, devices, splashScreen }
@@ -593,7 +623,7 @@ class _SettingsHomeDialog extends StatelessWidget {
           ListTile(
             key: const Key('splash-settings'),
             leading: const Icon(Icons.slideshow_outlined),
-            title: const Text('Splash screen customization'),
+            title: const Text('Preferences'),
             subtitle: Text(
               '${session.startupSplashEnabled ? 'Startup on' : 'Startup off'} · '
               '${session.shutdownSplashEnabled ? 'Shutdown on' : 'Shutdown off'}',
@@ -653,7 +683,7 @@ class _StreamQualityDialogState extends State<_StreamQualityDialog> {
             initialValue: _resolution,
             decoration: const InputDecoration(
               labelText: 'Output resolution',
-              helperText: 'FFmpeg preserves aspect ratio and never enlarges.',
+              helperText: 'FFmpeg produces an exact 16:9 output size.',
             ),
             items: StreamOutputResolution.values
                 .map(
@@ -819,6 +849,9 @@ class _SplashSettingsDialogState extends State<_SplashSettingsDialog> {
   late int _shutdownDuration;
   late String _startupBackground;
   late String _shutdownBackground;
+  late TextEditingController _youtubeDescriptionController;
+  late TextEditingController _supportContactNameController;
+  late TextEditingController _supportContactPhoneController;
 
   @override
   void initState() {
@@ -832,6 +865,23 @@ class _SplashSettingsDialogState extends State<_SplashSettingsDialog> {
     _shutdownDuration = session.shutdownSplashDurationSeconds;
     _startupBackground = session.startupSplashBackgroundPath;
     _shutdownBackground = session.shutdownSplashBackgroundPath;
+    _youtubeDescriptionController = TextEditingController(
+      text: session.youtubeDescription,
+    );
+    _supportContactNameController = TextEditingController(
+      text: session.supportContactName,
+    );
+    _supportContactPhoneController = TextEditingController(
+      text: session.supportContactPhone,
+    );
+  }
+
+  @override
+  void dispose() {
+    _youtubeDescriptionController.dispose();
+    _supportContactNameController.dispose();
+    _supportContactPhoneController.dispose();
+    super.dispose();
   }
 
   Future<void> _chooseBackground({required bool startup}) async {
@@ -856,6 +906,9 @@ class _SplashSettingsDialogState extends State<_SplashSettingsDialog> {
       shutdownDurationSeconds: _shutdownDuration,
       startupBackgroundPath: _startupBackground,
       shutdownBackgroundPath: _shutdownBackground,
+      youtubeDescription: _youtubeDescriptionController.text,
+      supportContactName: _supportContactNameController.text.trim(),
+      supportContactPhone: _supportContactPhoneController.text.trim(),
     );
     widget.onBack();
   }
@@ -863,13 +916,44 @@ class _SplashSettingsDialogState extends State<_SplashSettingsDialog> {
   @override
   Widget build(BuildContext context) => AlertDialog(
     icon: const Icon(Icons.slideshow_outlined, size: 36),
-    title: const Text('Splash screen customization'),
+    title: const Text('Preferences'),
     content: SizedBox(
       width: 520,
       child: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            TextField(
+              key: const Key('support-contact-name'),
+              controller: _supportContactNameController,
+              decoration: const InputDecoration(
+                labelText: 'Support contact name',
+              ),
+            ),
+            const SizedBox(height: 18),
+            TextField(
+              key: const Key('support-contact-phone'),
+              controller: _supportContactPhoneController,
+              keyboardType: TextInputType.phone,
+              decoration: const InputDecoration(
+                labelText: 'Support contact phone number',
+                helperText: 'Shown at the top of the main screen.',
+              ),
+            ),
+            const Divider(height: 32),
+            TextField(
+              key: const Key('youtube-description'),
+              controller: _youtubeDescriptionController,
+              minLines: 2,
+              maxLines: 4,
+              decoration: const InputDecoration(
+                labelText: 'YouTube stream description',
+                helperText:
+                    'Included in the description of each YouTube stream.',
+                alignLabelWithHint: true,
+              ),
+            ),
+            const Divider(height: 32),
             _SplashSection(
               title: 'Startup splash',
               enabled: _startupEnabled,
@@ -1623,7 +1707,7 @@ class _CameraFeed extends StatelessWidget {
                 gradient: LinearGradient(
                   begin: Alignment.center,
                   end: Alignment.bottomCenter,
-                  colors: [Colors.transparent, kAccentTeal],
+                  colors: [Colors.transparent, Color(0xb3000000)],
                 ),
               ),
             ),
@@ -1640,14 +1724,14 @@ class _CameraFeed extends StatelessWidget {
                         Text(
                           'Camera $number',
                           style: const TextStyle(
-                            color: Colors.black,
+                            color: Colors.white,
                             fontWeight: FontWeight.w700,
                           ),
                         ),
                         _OverflowTooltipText(
                           source.description.name,
                           style: const TextStyle(
-                            color: Colors.black87,
+                            color: Colors.white70,
                             fontSize: 12,
                           ),
                         ),
@@ -1697,11 +1781,9 @@ class _CameraPreview extends StatelessWidget {
       return const Center(child: CircularProgressIndicator(color: kAccentBlue));
     }
 
-    return Center(
+    return Align(
+      alignment: Alignment.topCenter,
       child: AspectRatio(
-        // The camera backend reports the negotiated frame dimensions after
-        // initialization. AspectRatio scales that frame down to fit the card
-        // without stretching or cropping it.
         aspectRatio: previewSize.width / previewSize.height,
         child: controller.buildPreview(),
       ),
@@ -2189,6 +2271,8 @@ class _GoLiveBar extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 20),
+          _StreamRuntime(startedAt: session.startedAt),
+          const SizedBox(width: 20),
           SizedBox(
             width: 240,
             child: FilledButton.icon(
@@ -2240,4 +2324,97 @@ class _GoLiveBar extends StatelessWidget {
     RecordingLifecycleStage.recordingSaved => 'Saved ${event.detail}',
     RecordingLifecycleStage.stopped => event.detail,
   };
+}
+
+class _StreamRuntime extends StatefulWidget {
+  const _StreamRuntime({required this.startedAt});
+  final DateTime? startedAt;
+
+  @override
+  State<_StreamRuntime> createState() => _StreamRuntimeState();
+}
+
+class _StreamRuntimeState extends State<_StreamRuntime> {
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _syncTimer();
+  }
+
+  @override
+  void didUpdateWidget(_StreamRuntime oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.startedAt != widget.startedAt) _syncTimer();
+  }
+
+  void _syncTimer() {
+    _timer?.cancel();
+    _timer = widget.startedAt == null
+        ? null
+        : Timer.periodic(const Duration(seconds: 1), (_) {
+            if (mounted) setState(() {});
+          });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final startedAt = widget.startedAt;
+    final elapsed = startedAt == null
+        ? null
+        : DateTime.now().difference(startedAt);
+    return Container(
+      key: const Key('stream-runtime'),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0x0f000000),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            Icons.timer_outlined,
+            size: 20,
+            color: startedAt == null ? Colors.black45 : Colors.black,
+          ),
+          const SizedBox(width: 8),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Stream runtime',
+                style: TextStyle(fontSize: 11, color: Colors.black54),
+              ),
+              Text(
+                elapsed == null ? '--:--:--' : _formatDuration(elapsed),
+                style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                  fontFeatures: [FontFeature.tabularFigures()],
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatDuration(Duration duration) {
+    final totalSeconds = duration.isNegative ? 0 : duration.inSeconds;
+    final hours = totalSeconds ~/ 3600;
+    final minutes = totalSeconds.remainder(3600) ~/ 60;
+    final seconds = totalSeconds.remainder(60);
+    return '${hours.toString().padLeft(2, '0')}:'
+        '${minutes.toString().padLeft(2, '0')}:'
+        '${seconds.toString().padLeft(2, '0')}';
+  }
 }

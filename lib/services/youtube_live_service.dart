@@ -10,6 +10,7 @@ import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 
 import '../domain/stream_session.dart';
+import 'app_log.dart';
 
 abstract interface class YouTubeCredentialStore {
   Future<String?> read();
@@ -248,7 +249,7 @@ class YouTubeLiveService extends ChangeNotifier {
           Object error,
           StackTrace stackTrace,
         ) {
-          debugPrint('Could not persist refreshed YouTube credentials: $error');
+          logMessage('Could not persist refreshed YouTube credentials: $error');
         }),
       );
     });
@@ -264,6 +265,7 @@ class YouTubeLiveService extends ChangeNotifier {
         LiveBroadcast(
           snippet: LiveBroadcastSnippet(
             title: session.title,
+            description: session.youtubeDescription,
             scheduledStartTime: DateTime.now().toUtc(),
           ),
           status: LiveBroadcastStatus(
@@ -382,7 +384,7 @@ class YouTubeLiveService extends ChangeNotifier {
             );
             final lifeCycle =
                 broadcasts.items?.firstOrNull?.status?.lifeCycleStatus;
-            debugPrint('[YouTube lifecycle] ${lifeCycle ?? 'unknown'}');
+            logMessage('[YouTube lifecycle] ${lifeCycle ?? 'unknown'}');
             switch (lifeCycle) {
               case 'live':
                 _setStatus(YouTubeConnectionStatus.live);
@@ -434,7 +436,7 @@ class YouTubeLiveService extends ChangeNotifier {
 
   void reportPublisherError(Object error) {
     final message = _friendlyError(error);
-    debugPrint('[YouTube publisher] $message');
+    logMessage('[YouTube publisher] $message');
     _setError(message);
   }
 
@@ -483,11 +485,11 @@ class YouTubeLiveService extends ChangeNotifier {
     while (stopwatch.elapsed < completionDrainTimeout) {
       final response = await api.liveStreams.list(['status'], id: [streamId]);
       final status = response.items?.firstOrNull?.status?.streamStatus;
-      debugPrint('[YouTube ingest drain] ${status ?? 'unknown'}');
+      logMessage('[YouTube ingest drain] ${status ?? 'unknown'}');
       if (status != 'active') return;
       await Future<void>.delayed(ingestPollInterval);
     }
-    debugPrint(
+    logMessage(
       '[YouTube ingest drain] Timed out after '
       '${completionDrainTimeout.inSeconds}s; completing broadcast.',
     );

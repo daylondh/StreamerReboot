@@ -12,6 +12,9 @@ class StreamTextSettings {
     this.shutdownSplashDurationSeconds = 5,
     this.startupSplashBackgroundPath = '',
     this.shutdownSplashBackgroundPath = '',
+    this.youtubeDescription = StreamSession.defaultYouTubeDescription,
+    this.supportContactName = '',
+    this.supportContactPhone = '',
     this.privacy = ServicePrivacy.unlisted,
     this.recordLocally = true,
     this.recordingDirectory = '',
@@ -33,6 +36,9 @@ class StreamTextSettings {
   final int shutdownSplashDurationSeconds;
   final String startupSplashBackgroundPath;
   final String shutdownSplashBackgroundPath;
+  final String youtubeDescription;
+  final String supportContactName;
+  final String supportContactPhone;
   final ServicePrivacy privacy;
   final bool recordLocally;
   final String recordingDirectory;
@@ -62,6 +68,9 @@ class SharedPreferencesStreamSettingsStore implements StreamSettingsStore {
   static const _shutdownDurationKey = 'stream.shutdownSplashDurationSeconds';
   static const _startupBackgroundKey = 'stream.startupSplashBackgroundPath';
   static const _shutdownBackgroundKey = 'stream.shutdownSplashBackgroundPath';
+  static const _youtubeDescriptionKey = 'stream.youtubeDescription';
+  static const _supportContactNameKey = 'app.supportContactName';
+  static const _supportContactPhoneKey = 'app.supportContactPhone';
   static const _recordingDirectoryKey = 'stream.recordingDirectory';
   static const _recordLocallyKey = 'stream.recordLocally';
   static const _privacyKey = 'stream.privacy';
@@ -90,6 +99,11 @@ class SharedPreferencesStreamSettingsStore implements StreamSettingsStore {
           preferences.getString(_startupBackgroundKey) ?? '',
       shutdownSplashBackgroundPath:
           preferences.getString(_shutdownBackgroundKey) ?? '',
+      youtubeDescription:
+          preferences.getString(_youtubeDescriptionKey) ??
+          StreamSession.defaultYouTubeDescription,
+      supportContactName: preferences.getString(_supportContactNameKey) ?? '',
+      supportContactPhone: preferences.getString(_supportContactPhoneKey) ?? '',
       privacy: ServicePrivacy.values.firstWhere(
         (value) => value.name == privacyName,
         orElse: () => ServicePrivacy.unlisted,
@@ -151,6 +165,18 @@ class SharedPreferencesStreamSettingsStore implements StreamSettingsStore {
       preferences.setString(
         _shutdownBackgroundKey,
         settings.shutdownSplashBackgroundPath,
+      ),
+      preferences.setString(
+        _youtubeDescriptionKey,
+        settings.youtubeDescription,
+      ),
+      preferences.setString(
+        _supportContactNameKey,
+        settings.supportContactName,
+      ),
+      preferences.setString(
+        _supportContactPhoneKey,
+        settings.supportContactPhone,
       ),
       preferences.setString(_privacyKey, settings.privacy.name),
       preferences.setBool(_recordLocallyKey, settings.recordLocally),

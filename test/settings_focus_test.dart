@@ -57,6 +57,9 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    expect(find.byKey(const Key('support-contact-message')), findsOneWidget);
+    expect(find.byKey(const Key('stream-runtime')), findsOneWidget);
+    expect(find.text('--:--:--'), findsOneWidget);
 
     await tester.tap(find.byKey(const Key('application-settings')));
     await tester.pumpAndSettle();
@@ -75,6 +78,8 @@ void main() {
     expect(controller.session.outputResolution, StreamOutputResolution.p720);
     await tester.tap(find.byKey(const Key('splash-settings')));
     await tester.pumpAndSettle();
+    expect(find.byKey(const Key('support-contact-name')), findsOneWidget);
+    expect(find.byKey(const Key('support-contact-phone')), findsOneWidget);
     expect(find.text('Startup splash'), findsOneWidget);
     expect(find.text('Shutdown splash'), findsOneWidget);
     expect(find.text('Show stream name'), findsNWidgets(2));

@@ -3,14 +3,15 @@ enum StreamStatus { idle, preparing, live, stopping, failed }
 enum ServicePrivacy { public, unlisted, private }
 
 enum StreamOutputResolution {
-  original(null, 'Original'),
-  p1080(1080, '1080p'),
-  p720(720, '720p'),
-  p480(480, '480p');
+  original(null, null, 'Original'),
+  p1080(1920, 1080, '1080p'),
+  p720(1280, 720, '720p'),
+  p480(854, 480, '480p');
 
-  const StreamOutputResolution(this.maxHeight, this.label);
+  const StreamOutputResolution(this.width, this.height, this.label);
 
-  final int? maxHeight;
+  final int? width;
+  final int? height;
   final String label;
 }
 
@@ -55,6 +56,9 @@ enum VideoEncoderPreference {
 }
 
 class StreamSession {
+  static const defaultYouTubeDescription =
+      "Created with Daylond Hooper's Streamer-Reboot Software";
+
   const StreamSession({
     required this.title,
     this.privacy = ServicePrivacy.unlisted,
@@ -74,6 +78,9 @@ class StreamSession {
     this.shutdownSplashDurationSeconds = 5,
     this.startupSplashBackgroundPath = '',
     this.shutdownSplashBackgroundPath = '',
+    this.youtubeDescription = defaultYouTubeDescription,
+    this.supportContactName = '',
+    this.supportContactPhone = '',
     this.startupText = '',
     this.shutdownText = '',
     this.status = StreamStatus.idle,
@@ -98,6 +105,9 @@ class StreamSession {
   final int shutdownSplashDurationSeconds;
   final String startupSplashBackgroundPath;
   final String shutdownSplashBackgroundPath;
+  final String youtubeDescription;
+  final String supportContactName;
+  final String supportContactPhone;
   final String startupText;
   final String shutdownText;
   final StreamStatus status;
@@ -126,6 +136,9 @@ class StreamSession {
     int? shutdownSplashDurationSeconds,
     String? startupSplashBackgroundPath,
     String? shutdownSplashBackgroundPath,
+    String? youtubeDescription,
+    String? supportContactName,
+    String? supportContactPhone,
     String? startupText,
     String? shutdownText,
     StreamStatus? status,
@@ -157,6 +170,9 @@ class StreamSession {
         startupSplashBackgroundPath ?? this.startupSplashBackgroundPath,
     shutdownSplashBackgroundPath:
         shutdownSplashBackgroundPath ?? this.shutdownSplashBackgroundPath,
+    youtubeDescription: youtubeDescription ?? this.youtubeDescription,
+    supportContactName: supportContactName ?? this.supportContactName,
+    supportContactPhone: supportContactPhone ?? this.supportContactPhone,
     startupText: startupText ?? this.startupText,
     shutdownText: shutdownText ?? this.shutdownText,
     status: status ?? this.status,

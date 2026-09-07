@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import 'package:record/record.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../services/app_log.dart';
+
 class AudioSource {
   AudioSource({required this.device, required this.recorder});
 
@@ -238,7 +240,7 @@ class AudioSourcesController extends ChangeNotifier {
           Object error,
           StackTrace stackTrace,
         ) {
-          debugPrint('Audio input teardown failed: $error');
+          logMessage('Audio input teardown failed: $error');
         }),
       );
     }

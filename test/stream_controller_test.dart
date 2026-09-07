@@ -179,6 +179,9 @@ void main() {
         shutdownSplashDurationSeconds: 15,
         startupSplashBackgroundPath: '/images/start.jpg',
         shutdownSplashBackgroundPath: '/images/end.png',
+        youtubeDescription: 'Original YouTube description',
+        supportContactName: 'Alex Smith',
+        supportContactPhone: '555-0100',
         privacy: ServicePrivacy.private,
         recordLocally: false,
         recordingDirectory: '/recordings/original',
@@ -202,6 +205,9 @@ void main() {
     expect(first.session.shutdownSplashDurationSeconds, 15);
     expect(first.session.startupSplashBackgroundPath, '/images/start.jpg');
     expect(first.session.shutdownSplashBackgroundPath, '/images/end.png');
+    expect(first.session.youtubeDescription, 'Original YouTube description');
+    expect(first.session.supportContactName, 'Alex Smith');
+    expect(first.session.supportContactPhone, '555-0100');
     expect(first.session.privacy, ServicePrivacy.private);
     expect(first.session.recordLocally, isFalse);
     expect(first.session.recordingDirectory, '/recordings/original');
@@ -227,6 +233,9 @@ void main() {
       shutdownDurationSeconds: 5,
       startupBackgroundPath: '/images/new-start.png',
       shutdownBackgroundPath: '',
+      youtubeDescription: 'Updated YouTube description',
+      supportContactName: 'Jordan Lee',
+      supportContactPhone: '555-0199',
     );
     first.updatePrivacy(ServicePrivacy.public);
     first.updateRecording(true);
@@ -254,6 +263,9 @@ void main() {
     expect(second.session.shutdownSplashDurationSeconds, 5);
     expect(second.session.startupSplashBackgroundPath, '/images/new-start.png');
     expect(second.session.shutdownSplashBackgroundPath, isEmpty);
+    expect(second.session.youtubeDescription, 'Updated YouTube description');
+    expect(second.session.supportContactName, 'Jordan Lee');
+    expect(second.session.supportContactPhone, '555-0199');
     expect(second.session.privacy, ServicePrivacy.public);
     expect(second.session.recordLocally, isTrue);
     expect(second.session.recordingDirectory, '/recordings/new');

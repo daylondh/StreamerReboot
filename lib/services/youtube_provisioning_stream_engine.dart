@@ -1,5 +1,5 @@
 import '../domain/stream_session.dart';
-import 'package:flutter/foundation.dart';
+import 'app_log.dart';
 import 'stream_engine.dart';
 import 'youtube_live_service.dart';
 
@@ -44,7 +44,7 @@ class YouTubeProvisioningStreamEngine implements StreamEngine {
         }
         return;
       } catch (error, stackTrace) {
-        debugPrint('[Stream startup] $error');
+        logMessage('[Stream startup] $error');
         youtube.cancelPendingStart();
         try {
           await localRecording.stop(session);

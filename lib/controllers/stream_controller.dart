@@ -29,6 +29,9 @@ class StreamController extends ChangeNotifier {
       shutdownSplashDurationSeconds: settings.shutdownSplashDurationSeconds,
       startupSplashBackgroundPath: settings.startupSplashBackgroundPath,
       shutdownSplashBackgroundPath: settings.shutdownSplashBackgroundPath,
+      youtubeDescription: settings.youtubeDescription,
+      supportContactName: settings.supportContactName,
+      supportContactPhone: settings.supportContactPhone,
       privacy: settings.privacy,
       recordLocally: settings.recordLocally,
       recordingDirectory: settings.recordingDirectory,
@@ -147,6 +150,9 @@ class StreamController extends ChangeNotifier {
     required int shutdownDurationSeconds,
     required String startupBackgroundPath,
     required String shutdownBackgroundPath,
+    required String youtubeDescription,
+    required String supportContactName,
+    required String supportContactPhone,
   }) {
     if (_session.isLive || _session.isBusy) return;
     _session = _session.copyWith(
@@ -158,6 +164,9 @@ class StreamController extends ChangeNotifier {
       shutdownSplashDurationSeconds: shutdownDurationSeconds,
       startupSplashBackgroundPath: startupBackgroundPath,
       shutdownSplashBackgroundPath: shutdownBackgroundPath,
+      youtubeDescription: youtubeDescription,
+      supportContactName: supportContactName,
+      supportContactPhone: supportContactPhone,
       clearError: true,
     );
     notifyListeners();
@@ -175,6 +184,9 @@ class StreamController extends ChangeNotifier {
         shutdownSplashDurationSeconds: _session.shutdownSplashDurationSeconds,
         startupSplashBackgroundPath: _session.startupSplashBackgroundPath,
         shutdownSplashBackgroundPath: _session.shutdownSplashBackgroundPath,
+        youtubeDescription: _session.youtubeDescription,
+        supportContactName: _session.supportContactName,
+        supportContactPhone: _session.supportContactPhone,
         privacy: _session.privacy,
         recordLocally: _session.recordLocally,
         recordingDirectory: _session.recordingDirectory,

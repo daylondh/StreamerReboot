@@ -186,6 +186,7 @@ void main() {
       const StreamSession(
         title: 'Sunday Worship',
         privacy: ServicePrivacy.unlisted,
+        youtubeDescription: 'Join us for Sunday worship.',
       ),
     );
 
@@ -204,6 +205,10 @@ void main() {
     expect(requests, hasLength(3));
     final broadcastBody = jsonDecode(requests.first.body);
     expect(broadcastBody['snippet']['title'], 'Sunday Worship');
+    expect(
+      broadcastBody['snippet']['description'],
+      'Join us for Sunday worship.',
+    );
     expect(broadcastBody['status']['privacyStatus'], 'unlisted');
     expect(
       broadcastBody['contentDetails']['monitorStream']['enableMonitorStream'],

@@ -115,7 +115,14 @@ void main() {
       outputResolution: StreamOutputResolution.p1080,
     );
 
-    expect(arguments, containsAllInOrder(['-vf', r'scale=-2:min(1080\,ih)']));
+    expect(
+      arguments,
+      containsAllInOrder([
+        '-vf',
+        r'setpts=PTS-STARTPTS,crop=trunc(min(iw\,ih*16/9)/2)*2:'
+            r'trunc(min(ih\,iw*9/16)/2)*2,scale=1920:1080,setsar=1',
+      ]),
+    );
   });
 
   test('applies selected bitrate and frame rate to FFmpeg', () {
@@ -139,28 +146,34 @@ void main() {
     expect(arguments, containsAllInOrder(['-g', '48']));
   });
 
-  test(
-    'uses a shared wall clock and async audio correction to prevent drift',
-    () {
-      final arguments = FfmpegStreamEngine.buildArguments(
-        videoPort: 41001,
-        audioPort: 41002,
-        width: 1920,
-        height: 1080,
-        pixelFormat: 'bgra',
-        videoEncoder: 'libx264',
-        ingestionUrl: 'rtmps://youtube.example/live/key',
-      );
+  test('uses wall-clock video timing without rewriting audio timestamps', () {
+    final arguments = FfmpegStreamEngine.buildArguments(
+      videoPort: 41001,
+      audioPort: 41002,
+      width: 1920,
+      height: 1080,
+      pixelFormat: 'bgra',
+      videoEncoder: 'libx264',
+      ingestionUrl: 'rtmps://youtube.example/live/key',
+    );
 
-      expect(arguments, containsAllInOrder(['-copyts', '-start_at_zero']));
-      expect(
-        arguments.where((value) => value == '-use_wallclock_as_timestamps'),
-        hasLength(2),
-      );
-      expect(
-        arguments,
-        containsAllInOrder(['-af', 'aresample=async=1000:first_pts=0']),
-      );
-    },
-  );
+    expect(
+      arguments.where((value) => value == '-use_wallclock_as_timestamps'),
+      hasLength(1),
+    );
+    final wallClockIndex = arguments.indexOf('-use_wallclock_as_timestamps');
+    final videoInputIndex = arguments.indexOf('tcp://127.0.0.1:41001');
+    final audioInputIndex = arguments.indexOf('tcp://127.0.0.1:41002');
+    expect(wallClockIndex, lessThan(videoInputIndex));
+    expect(videoInputIndex, lessThan(audioInputIndex));
+    expect(
+      arguments,
+      containsAllInOrder([
+        '-vf',
+        r'setpts=PTS-STARTPTS,crop=trunc(min(iw\,ih*16/9)/2)*2:'
+            r'trunc(min(ih\,iw*9/16)/2)*2,setsar=1',
+      ]),
+    );
+    expect(arguments, isNot(contains('-af')));
+  });
 }
