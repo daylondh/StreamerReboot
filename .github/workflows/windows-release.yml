@@ -2,6 +2,16 @@ name: Build Windows release
 
 on:
   workflow_dispatch:
+    inputs:
+      run_checks:
+        description: Run analyze and tests before packaging
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  group: windows-package-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -16,42 +26,40 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
 
-      - name: Install stable Flutter SDK
-        shell: pwsh
-        run: |
-          $flutterRoot = Join-Path $env:RUNNER_TEMP "flutter"
-          git clone https://github.com/flutter/flutter.git --branch stable --depth 1 $flutterRoot
-          (Join-Path $flutterRoot "bin") | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Set up cached Flutter SDK
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+          pub-cache: true
 
       - name: Configure Flutter
         shell: pwsh
         run: |
           flutter config --enable-windows-desktop
-          flutter doctor -v
           flutter pub get
 
       - name: Analyze and test
+        if: ${{ inputs.run_checks }}
         shell: pwsh
         run: |
           flutter analyze
           flutter test
 
-      - name: Install FFmpeg
-        shell: pwsh
-        run: choco install ffmpeg --yes --no-progress
+      - name: Set up cached FFmpeg
+        id: setup-ffmpeg
+        uses: FedericoCarboni/setup-ffmpeg@v3
+        with:
+          ffmpeg-version: release
+          architecture: x64
+          linking-type: static
+          github-token: ${{ github.token }}
 
       - name: Build transferable Windows package
         shell: pwsh
         run: |
-          $ffmpeg = Get-ChildItem `
-            -Path (Join-Path $env:ChocolateyInstall "lib\ffmpeg\tools") `
-            -Filter "ffmpeg.exe" `
-            -File `
-            -Recurse | Select-Object -First 1
-          if (-not $ffmpeg) {
-            throw "Could not locate the FFmpeg executable installed by Chocolatey."
-          }
-          .\scripts\Package-Windows.ps1 -FfmpegPath $ffmpeg.FullName
+          $ffmpegPath = Join-Path '${{ steps.setup-ffmpeg.outputs.ffmpeg-path }}' 'ffmpeg.exe'
+          .\scripts\Package-Windows.ps1 -FfmpegPath $ffmpegPath
 
       - name: Upload Windows ZIP
         uses: actions/upload-artifact@v4

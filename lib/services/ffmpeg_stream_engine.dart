@@ -63,7 +63,6 @@ class FfmpegStreamEngine extends ChangeNotifier
   ServerSocket? _audioServer;
   Timer? _audioTimer;
   Timer? _slateTimer;
-  Future<void>? _pendingSlateWrite;
   int _slateGeneration = 0;
   final _DelayedVideoQueue _videoQueue = _DelayedVideoQueue();
   bool _slateActive = false;
@@ -591,27 +590,12 @@ class FfmpegStreamEngine extends ChangeNotifier
   }
 
   void _queueSlateFrame(Socket socket, Uint8List bytes) {
-    // A raw 4K frame is roughly 32 MB. Calling Socket.add on every timer tick
-    // without waiting for the previous write can queue minutes of duplicate
-    // slate frames when an encoder cannot consume them in real time (most
-    // visibly with Media Foundation on Windows). Respect socket backpressure
-    // and skip ticks while one complete frame is still being delivered.
-    if (_pendingSlateWrite != null) return;
-    late final Future<void> write;
-    write = _writeSlateFrame(socket, bytes).whenComplete(() {
-      if (identical(_pendingSlateWrite, write)) _pendingSlateWrite = null;
-    });
-    _pendingSlateWrite = write;
-    unawaited(write);
-  }
-
-  Future<void> _writeSlateFrame(Socket socket, Uint8List bytes) async {
-    try {
-      socket.add(bytes);
-      await socket.flush();
-    } catch (error) {
-      _recordTransportError('video', error);
-    }
+    _videoQueue.add(
+      bytes,
+      Duration.zero,
+      socket,
+      (error) => _recordTransportError('video', error),
+    );
   }
 
   static const _fadeDuration = Duration(milliseconds: 600);
@@ -619,7 +603,6 @@ class FfmpegStreamEngine extends ChangeNotifier
   Future<void> _crossfade(Uint8List slate, {required bool toSlate}) async {
     _slateTimer?.cancel();
     _slateTimer = null;
-    _pendingSlateWrite = null;
     _videoQueue.clear();
     _fadeSlate = slate;
     _fadeStartedAt = DateTime.now();
@@ -1068,6 +1051,7 @@ class PcmQueue {
 class _DelayedVideoQueue {
   final Queue<_DelayedVideoFrame> _frames = Queue<_DelayedVideoFrame>();
   Timer? _timer;
+  Future<void>? _pendingWrite;
 
   void add(
     Uint8List bytes,
@@ -1075,33 +1059,70 @@ class _DelayedVideoQueue {
     Socket socket,
     void Function(Object error) onError,
   ) {
-    if (delay == Duration.zero && _frames.isEmpty) {
-      try {
-        socket.add(bytes);
-      } catch (error) {
-        onError(error);
-      }
-      return;
-    }
     _frames.add(_DelayedVideoFrame(bytes, DateTime.now().add(delay)));
+    // Retain enough frames for the user-selected delay, with only a small
+    // amount of scheduling headroom. If FFmpeg falls behind, discard the
+    // oldest frames instead of converting encoder load into ever-growing live
+    // latency. Camera capture is configured to at most 60 fps.
+    final maxFrames = math.max(
+      2,
+      (delay.inMilliseconds * 60 / 1000).ceil() + 2,
+    );
+    while (_frames.length > maxFrames) {
+      _frames.removeFirst();
+    }
     _schedule(socket, onError);
   }
 
   void _schedule(Socket socket, void Function(Object error) onError) {
     _timer?.cancel();
+    _timer = null;
+    if (_pendingWrite != null) return;
     if (_frames.isEmpty) return;
     final wait = _frames.first.sendAt.difference(DateTime.now());
-    _timer = Timer(wait.isNegative ? Duration.zero : wait, () {
-      final now = DateTime.now();
-      try {
-        while (_frames.isNotEmpty && !_frames.first.sendAt.isAfter(now)) {
-          socket.add(_frames.removeFirst().bytes);
-        }
-      } catch (error) {
-        onError(error);
-      }
+    if (wait.isNegative || wait == Duration.zero) {
+      _writeLatestDueFrame(socket, onError);
+    } else {
+      _timer = Timer(wait, () => _writeLatestDueFrame(socket, onError));
+    }
+  }
+
+  void _writeLatestDueFrame(
+    Socket socket,
+    void Function(Object error) onError,
+  ) {
+    if (_pendingWrite != null || _frames.isEmpty) return;
+    final now = DateTime.now();
+    if (_frames.first.sendAt.isAfter(now)) {
+      _schedule(socket, onError);
+      return;
+    }
+    var frame = _frames.removeFirst();
+    // Only the newest frame that is already due matters for a live feed. This
+    // bounds latency when encoding temporarily runs slower than capture.
+    while (_frames.isNotEmpty && !_frames.first.sendAt.isAfter(now)) {
+      frame = _frames.removeFirst();
+    }
+    late final Future<void> write;
+    write = _writeFrame(socket, frame.bytes, onError).whenComplete(() {
+      if (identical(_pendingWrite, write)) _pendingWrite = null;
       _schedule(socket, onError);
     });
+    _pendingWrite = write;
+    unawaited(write);
+  }
+
+  Future<void> _writeFrame(
+    Socket socket,
+    Uint8List bytes,
+    void Function(Object error) onError,
+  ) async {
+    try {
+      socket.add(bytes);
+      await socket.flush();
+    } catch (error) {
+      onError(error);
+    }
   }
 
   void clear() {
