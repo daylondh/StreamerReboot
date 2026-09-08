@@ -63,6 +63,7 @@ class FfmpegStreamEngine extends ChangeNotifier
   ServerSocket? _audioServer;
   Timer? _audioTimer;
   Timer? _slateTimer;
+  Future<void>? _pendingSlateWrite;
   int _slateGeneration = 0;
   final _DelayedVideoQueue _videoQueue = _DelayedVideoQueue();
   bool _slateActive = false;
@@ -557,18 +558,10 @@ class FfmpegStreamEngine extends ChangeNotifier
     _videoQueue.clear();
     _slateActive = true;
 
-    void writeFrame() {
-      try {
-        socket.add(bytes);
-      } catch (error) {
-        _recordTransportError('video', error);
-      }
-    }
-
-    writeFrame();
+    _queueSlateFrame(socket, bytes);
     _slateTimer = Timer.periodic(
       const Duration(milliseconds: 33),
-      (_) => writeFrame(),
+      (_) => _queueSlateFrame(socket, bytes),
     );
     await until;
   }
@@ -585,18 +578,10 @@ class FfmpegStreamEngine extends ChangeNotifier
     _videoQueue.clear();
     _slateActive = true;
 
-    void writeFrame() {
-      try {
-        socket.add(bytes);
-      } catch (error) {
-        _recordTransportError('video', error);
-      }
-    }
-
-    writeFrame();
+    _queueSlateFrame(socket, bytes);
     _slateTimer = Timer.periodic(
       const Duration(milliseconds: 33),
-      (_) => writeFrame(),
+      (_) => _queueSlateFrame(socket, bytes),
     );
     await Future<void>.delayed(duration);
     if (generation != _slateGeneration) return;
@@ -605,11 +590,36 @@ class FfmpegStreamEngine extends ChangeNotifier
     if (!keepActive) _slateActive = false;
   }
 
+  void _queueSlateFrame(Socket socket, Uint8List bytes) {
+    // A raw 4K frame is roughly 32 MB. Calling Socket.add on every timer tick
+    // without waiting for the previous write can queue minutes of duplicate
+    // slate frames when an encoder cannot consume them in real time (most
+    // visibly with Media Foundation on Windows). Respect socket backpressure
+    // and skip ticks while one complete frame is still being delivered.
+    if (_pendingSlateWrite != null) return;
+    late final Future<void> write;
+    write = _writeSlateFrame(socket, bytes).whenComplete(() {
+      if (identical(_pendingSlateWrite, write)) _pendingSlateWrite = null;
+    });
+    _pendingSlateWrite = write;
+    unawaited(write);
+  }
+
+  Future<void> _writeSlateFrame(Socket socket, Uint8List bytes) async {
+    try {
+      socket.add(bytes);
+      await socket.flush();
+    } catch (error) {
+      _recordTransportError('video', error);
+    }
+  }
+
   static const _fadeDuration = Duration(milliseconds: 600);
 
   Future<void> _crossfade(Uint8List slate, {required bool toSlate}) async {
     _slateTimer?.cancel();
     _slateTimer = null;
+    _pendingSlateWrite = null;
     _videoQueue.clear();
     _fadeSlate = slate;
     _fadeStartedAt = DateTime.now();
