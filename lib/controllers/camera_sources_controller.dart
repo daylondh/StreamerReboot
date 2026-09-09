@@ -38,7 +38,7 @@ class CameraSourcesController extends ChangeNotifier {
     CameraDescription description,
     ResolutionPreset preset,
     int fps,
-  ) => CameraController(description, preset, enableAudio: true, fps: fps);
+  ) => CameraController(description, preset, enableAudio: false, fps: fps);
 
   void configure({
     required CameraCaptureResolution captureResolution,

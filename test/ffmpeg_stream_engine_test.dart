@@ -134,7 +134,7 @@ void main() {
         '-c:v',
         'libx264',
         '-preset',
-        'veryfast',
+        'ultrafast',
         '-tune',
         'zerolatency',
       ]),

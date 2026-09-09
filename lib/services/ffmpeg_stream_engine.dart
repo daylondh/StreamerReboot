@@ -386,7 +386,7 @@ class FfmpegStreamEngine extends ChangeNotifier
     ],
     if (videoEncoder == 'libx264') ...[
       '-preset',
-      'veryfast',
+      'ultrafast',
       '-tune',
       'zerolatency',
     ],
@@ -438,7 +438,11 @@ class FfmpegStreamEngine extends ChangeNotifier
           frame.height == targetHeight &&
           sourceFormat == targetFormat &&
           plane.bytesPerRow == rowBytes) {
-        bytes = Uint8List.fromList(plane.bytes);
+        // Retaining the plane's Uint8List keeps its Dart-managed byte buffer
+        // reachable until delivery. Avoid copying an entire BGRA frame here:
+        // at 1080p that was an additional ~249 MB/s allocation/copy at 30 fps
+        // before FFmpeg did any work.
+        bytes = plane.bytes;
       } else {
         bytes = _normalizeFrame(
           frame,
@@ -981,6 +985,14 @@ class FfmpegStreamEngine extends ChangeNotifier
 
   static String _videoEncoder(VideoEncoderPreference preference) {
     if (preference == VideoEncoderPreference.software) return 'libx264';
+    // Media Foundation can advertise h264_mf even when the installed GPU
+    // driver cannot open it, returning AVERROR_EXTERNAL (-542398533) only
+    // after streaming has begun. Favor the deterministic low-CPU x264 path in
+    // Automatic mode on Windows; users can still explicitly opt into hardware
+    // encoding on systems where it has been verified.
+    if (Platform.isWindows && preference == VideoEncoderPreference.automatic) {
+      return 'libx264';
+    }
     return _defaultVideoEncoder;
   }
 }
