@@ -38,6 +38,17 @@ void main() {
 
     expect(arguments, containsAllInOrder(['-video_size', '3840x2160']));
     expect(arguments, containsAllInOrder(['-c:v', 'h264_mf']));
+    expect(
+      arguments,
+      containsAllInOrder([
+        '-c:v',
+        'h264_mf',
+        '-hw_encoding',
+        '1',
+        '-scenario',
+        'live_streaming',
+      ]),
+    );
   });
 
   test('builds a YouTube-compatible FFmpeg tee pipeline', () {
@@ -101,6 +112,17 @@ void main() {
       'rtmps://youtube.example/live/key',
     );
     expect(arguments.last, isNot(contains('[f=mp4')));
+    expect(
+      arguments,
+      containsAllInOrder([
+        '-c:v',
+        'libx264',
+        '-preset',
+        'veryfast',
+        '-tune',
+        'zerolatency',
+      ]),
+    );
   });
 
   test('adds an aspect-preserving FFmpeg downscale filter', () {

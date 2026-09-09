@@ -370,11 +370,23 @@ class FfmpegStreamEngine extends ChangeNotifier
     '$frameRate',
     '-c:v',
     videoEncoder,
+    if (videoEncoder == 'h264_mf') ...[
+      '-hw_encoding',
+      '1',
+      '-scenario',
+      'live_streaming',
+    ],
     if (videoEncoder == 'h264_videotoolbox') ...[
       '-realtime',
       '1',
       '-allow_sw',
       '1',
+    ],
+    if (videoEncoder == 'libx264') ...[
+      '-preset',
+      'veryfast',
+      '-tune',
+      'zerolatency',
     ],
     '-b:v',
     '${videoBitrate}k',
@@ -1065,8 +1077,8 @@ class _DelayedVideoQueue {
     // oldest frames instead of converting encoder load into ever-growing live
     // latency. Camera capture is configured to at most 60 fps.
     final maxFrames = math.max(
-      2,
-      (delay.inMilliseconds * 60 / 1000).ceil() + 2,
+      8,
+      (delay.inMilliseconds * 60 / 1000).ceil() + 8,
     );
     while (_frames.length > maxFrames) {
       _frames.removeFirst();
@@ -1081,28 +1093,23 @@ class _DelayedVideoQueue {
     if (_frames.isEmpty) return;
     final wait = _frames.first.sendAt.difference(DateTime.now());
     if (wait.isNegative || wait == Duration.zero) {
-      _writeLatestDueFrame(socket, onError);
+      _writeNextDueFrame(socket, onError);
     } else {
-      _timer = Timer(wait, () => _writeLatestDueFrame(socket, onError));
+      _timer = Timer(wait, () => _writeNextDueFrame(socket, onError));
     }
   }
 
-  void _writeLatestDueFrame(
-    Socket socket,
-    void Function(Object error) onError,
-  ) {
+  void _writeNextDueFrame(Socket socket, void Function(Object error) onError) {
     if (_pendingWrite != null || _frames.isEmpty) return;
     final now = DateTime.now();
     if (_frames.first.sendAt.isAfter(now)) {
       _schedule(socket, onError);
       return;
     }
-    var frame = _frames.removeFirst();
-    // Only the newest frame that is already due matters for a live feed. This
-    // bounds latency when encoding temporarily runs slower than capture.
-    while (_frames.isNotEmpty && !_frames.first.sendAt.isAfter(now)) {
-      frame = _frames.removeFirst();
-    }
+    // Drain in capture order for smooth motion. The bounded queue sheds its
+    // oldest frame only when the encoder remains saturated, while eight frames
+    // of jitter headroom absorb short Windows scheduling stalls.
+    final frame = _frames.removeFirst();
     late final Future<void> write;
     write = _writeFrame(socket, frame.bytes, onError).whenComplete(() {
       if (identical(_pendingWrite, write)) _pendingWrite = null;
