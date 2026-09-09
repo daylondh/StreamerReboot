@@ -38,15 +38,31 @@ void main() {
 
     expect(arguments, containsAllInOrder(['-video_size', '3840x2160']));
     expect(arguments, containsAllInOrder(['-c:v', 'h264_mf']));
+    expect(arguments, containsAllInOrder(['-scenario', 'live_streaming']));
+    expect(arguments, isNot(contains('-hw_encoding')));
+  });
+
+  test('forces Windows hardware encoding only when explicitly requested', () {
+    final arguments = FfmpegStreamEngine.buildArguments(
+      videoPort: 41001,
+      audioPort: 41002,
+      width: 1280,
+      height: 720,
+      pixelFormat: 'bgra',
+      videoEncoder: 'h264_mf',
+      forceHardwareEncoding: true,
+      ingestionUrl: 'rtmps://youtube.example/live/key',
+    );
+
     expect(
       arguments,
       containsAllInOrder([
         '-c:v',
         'h264_mf',
-        '-hw_encoding',
-        '1',
         '-scenario',
         'live_streaming',
+        '-hw_encoding',
+        '1',
       ]),
     );
   });

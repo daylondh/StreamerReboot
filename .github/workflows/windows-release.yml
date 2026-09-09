@@ -21,6 +21,10 @@ jobs:
     name: Build and package Windows x64
     runs-on: windows-latest
     timeout-minutes: 45
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      CMAKE_C_COMPILER_LAUNCHER: sccache
+      CMAKE_CXX_COMPILER_LAUNCHER: sccache
 
     steps:
       - name: Check out source
@@ -39,6 +43,9 @@ jobs:
           flutter config --enable-windows-desktop
           flutter pub get
 
+      - name: Set up cached Windows compiler
+        uses: mozilla-actions/sccache-action@v0.0.11
+
       - name: Analyze and test
         if: ${{ inputs.run_checks }}
         shell: pwsh
@@ -55,16 +62,21 @@ jobs:
           linking-type: static
           github-token: ${{ github.token }}
 
-      - name: Build transferable Windows package
+      - name: Build Windows release
+        shell: pwsh
+        run: flutter build windows --release --no-pub
+
+      - name: Assemble transferable package
         shell: pwsh
         run: |
           $ffmpegPath = Join-Path '${{ steps.setup-ffmpeg.outputs.ffmpeg-path }}' 'ffmpeg.exe'
-          .\scripts\Package-Windows.ps1 -FfmpegPath $ffmpegPath
+          .\scripts\Package-Windows.ps1 -FfmpegPath $ffmpegPath -SkipBuild -NoZip
 
-      - name: Upload Windows ZIP
+      - name: Upload Windows package
         uses: actions/upload-artifact@v4
         with:
           name: ChurchStreamer-Windows-x64
-          path: dist/ChurchStreamer-Windows-x64.zip
+          path: dist/ChurchStreamer-Windows-x64
           if-no-files-found: error
           retention-days: 14
+          compression-level: 1

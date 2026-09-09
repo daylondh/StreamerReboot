@@ -166,6 +166,8 @@ class FfmpegStreamEngine extends ChangeNotifier
         height: frame.height,
         pixelFormat: _pixelFormat!,
         videoEncoder: _videoEncoder(session.encoderPreference),
+        forceHardwareEncoding:
+            session.encoderPreference == VideoEncoderPreference.hardware,
         ingestionUrl: target,
         outputPath: _outputPath,
         outputResolution: session.outputResolution,
@@ -314,6 +316,7 @@ class FfmpegStreamEngine extends ChangeNotifier
     required String pixelFormat,
     required String videoEncoder,
     required String ingestionUrl,
+    bool forceHardwareEncoding = false,
     String? outputPath,
     StreamOutputResolution outputResolution = StreamOutputResolution.original,
     int videoBitrate = 4500,
@@ -371,10 +374,9 @@ class FfmpegStreamEngine extends ChangeNotifier
     '-c:v',
     videoEncoder,
     if (videoEncoder == 'h264_mf') ...[
-      '-hw_encoding',
-      '1',
       '-scenario',
       'live_streaming',
+      if (forceHardwareEncoding) ...['-hw_encoding', '1'],
     ],
     if (videoEncoder == 'h264_videotoolbox') ...[
       '-realtime',
