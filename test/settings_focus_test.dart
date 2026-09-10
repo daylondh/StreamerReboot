@@ -60,6 +60,10 @@ void main() {
     expect(find.byKey(const Key('support-contact-message')), findsOneWidget);
     expect(find.byKey(const Key('stream-runtime')), findsOneWidget);
     expect(find.text('--:--:--'), findsOneWidget);
+    expect(
+      tester.widget<TextField>(find.byKey(const Key('service-title'))).maxLines,
+      2,
+    );
 
     await tester.tap(find.byKey(const Key('application-settings')));
     await tester.pumpAndSettle();
