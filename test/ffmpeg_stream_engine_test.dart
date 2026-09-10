@@ -67,6 +67,43 @@ void main() {
     );
   });
 
+  test('uses low-latency vendor hardware encoder options', () {
+    final nvenc = FfmpegStreamEngine.buildArguments(
+      videoPort: 41001,
+      audioPort: 41002,
+      width: 1920,
+      height: 1080,
+      pixelFormat: 'bgra',
+      videoEncoder: 'h264_nvenc',
+      ingestionUrl: 'rtmps://youtube.example/live/key',
+    );
+    final amf = FfmpegStreamEngine.buildArguments(
+      videoPort: 41001,
+      audioPort: 41002,
+      width: 1920,
+      height: 1080,
+      pixelFormat: 'bgra',
+      videoEncoder: 'h264_amf',
+      ingestionUrl: 'rtmps://youtube.example/live/key',
+    );
+    final qsv = FfmpegStreamEngine.buildArguments(
+      videoPort: 41001,
+      audioPort: 41002,
+      width: 1920,
+      height: 1080,
+      pixelFormat: 'bgra',
+      videoEncoder: 'h264_qsv',
+      ingestionUrl: 'rtmps://youtube.example/live/key',
+    );
+
+    expect(nvenc, containsAllInOrder(['-preset', 'p1', '-tune', 'll']));
+    expect(
+      amf,
+      containsAllInOrder(['-usage', 'lowlatency', '-quality', 'speed']),
+    );
+    expect(qsv, containsAllInOrder(['-preset', 'veryfast']));
+  });
+
   test('builds a YouTube-compatible FFmpeg tee pipeline', () {
     final arguments = FfmpegStreamEngine.buildArguments(
       videoPort: 41001,

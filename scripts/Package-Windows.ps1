@@ -57,8 +57,8 @@ if (-not $FfmpegPath -or -not (Test-Path -LiteralPath $FfmpegPath -PathType Leaf
 
 $ffmpegInfo = & $FfmpegPath -hide_banner -encoders 2>&1 | Out-String
 if ($LASTEXITCODE -ne 0) { throw "FFmpeg could not be executed: $FfmpegPath" }
-if ($ffmpegInfo -notmatch "\bh264_mf\b") {
-    throw "This FFmpeg build does not provide the h264_mf encoder required by Church Streamer."
+if ($ffmpegInfo -notmatch "\b(h264_nvenc|h264_amf|h264_qsv|h264_mf)\b") {
+    throw "This FFmpeg build does not provide a supported Windows hardware H.264 encoder (NVENC, AMF, Quick Sync, or Media Foundation)."
 }
 
 New-Item -ItemType Directory -Force -Path $destinationRoot | Out-Null

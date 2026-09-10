@@ -61,7 +61,13 @@ $ffmpeg = Join-Path $AppDirectory "ffmpeg.exe"
 if (Test-Path $ffmpeg) {
     $encoderOutput = & $ffmpeg -hide_banner -encoders 2>&1 | Out-String
     Write-Check ($LASTEXITCODE -eq 0) "Bundled FFmpeg starts" "Rebuild the transfer package with a working Windows x64 FFmpeg executable."
-    Write-Check ($encoderOutput -match "\bh264_mf\b") "FFmpeg includes the h264_mf encoder" "Use a full Windows FFmpeg build that includes Media Foundation support."
+    $hardwareEncoders = @(
+        if ($encoderOutput -match "\bh264_nvenc\b") { "NVIDIA NVENC" }
+        if ($encoderOutput -match "\bh264_amf\b") { "AMD AMF" }
+        if ($encoderOutput -match "\bh264_qsv\b") { "Intel Quick Sync" }
+        if ($encoderOutput -match "\bh264_mf\b") { "Media Foundation" }
+    )
+    Write-Check ($hardwareEncoders.Count -gt 0) "FFmpeg includes a supported hardware H.264 encoder ($($hardwareEncoders -join ', '))" "Use a full Windows FFmpeg build with NVENC, AMF, Quick Sync, or Media Foundation support."
 }
 
 Write-CheckWarning (Test-Path (Join-Path $AppDirectory "client_secrets.json")) "YouTube OAuth client file is present" "This is only required for YouTube. Place client_secrets.json beside streamer_reboot.exe."

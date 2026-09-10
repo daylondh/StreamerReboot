@@ -76,6 +76,7 @@ class FfmpegStreamEngine extends ChangeNotifier
   StreamSubscription<String>? _stderrSubscription;
   int? _frameWidth;
   int? _frameHeight;
+  int _frameRate = 30;
   String? _pixelFormat;
   String? _outputPath;
   String? _sensitiveIngestionUrl;
@@ -135,6 +136,7 @@ class FfmpegStreamEngine extends ChangeNotifier
       final frame = await firstFrame.future.timeout(const Duration(seconds: 5));
       _frameWidth = frame.width;
       _frameHeight = frame.height;
+      _frameRate = session.frameRate.value;
       _pixelFormat = _ffmpegPixelFormat(frame);
       if (session.startupSplashEnabled) {
         _startupSlate = await _renderSlate(
@@ -159,15 +161,20 @@ class FfmpegStreamEngine extends ChangeNotifier
           ? await _createOutputPath(session)
           : null;
       _sensitiveIngestionUrl = target;
+      final videoEncoder = await _videoEncoder(
+        session.encoderPreference,
+        width: session.outputResolution.width ?? frame.width,
+        height: session.outputResolution.height ?? frame.height,
+      );
+      logMessage('[FFmpeg] Selected video encoder: $videoEncoder');
       final arguments = buildArguments(
         videoPort: _videoServer!.port,
         audioPort: _audioServer!.port,
         width: frame.width,
         height: frame.height,
         pixelFormat: _pixelFormat!,
-        videoEncoder: _videoEncoder(session.encoderPreference),
-        forceHardwareEncoding:
-            session.encoderPreference == VideoEncoderPreference.hardware,
+        videoEncoder: videoEncoder,
+        forceHardwareEncoding: videoEncoder == 'h264_mf',
         ingestionUrl: target,
         outputPath: _outputPath,
         outputResolution: session.outputResolution,
@@ -378,6 +385,14 @@ class FfmpegStreamEngine extends ChangeNotifier
       'live_streaming',
       if (forceHardwareEncoding) ...['-hw_encoding', '1'],
     ],
+    if (videoEncoder == 'h264_nvenc') ...['-preset', 'p1', '-tune', 'll'],
+    if (videoEncoder == 'h264_amf') ...[
+      '-usage',
+      'lowlatency',
+      '-quality',
+      'speed',
+    ],
+    if (videoEncoder == 'h264_qsv') ...['-preset', 'veryfast'],
     if (videoEncoder == 'h264_videotoolbox') ...[
       '-realtime',
       '1',
@@ -457,6 +472,7 @@ class FfmpegStreamEngine extends ChangeNotifier
         videoDelay,
         socket,
         (error) => _recordTransportError('video', error),
+        frameRate: _frameRate,
       );
     } catch (error) {
       _recordTransportError('video', error);
@@ -530,12 +546,15 @@ class FfmpegStreamEngine extends ChangeNotifier
             source.delayMs * 96, // 48 kHz, mono, 16-bit = 96 bytes/ms.
           ),
       ];
+      final chunkData = [
+        for (final chunk in chunks) ByteData.sublistView(chunk),
+      ];
       final output = Uint8List(byteCount);
       final outputData = ByteData.sublistView(output);
       for (var offset = 0; offset < byteCount; offset += 2) {
         var mixed = 0;
-        for (final chunk in chunks) {
-          mixed += ByteData.sublistView(chunk).getInt16(offset, Endian.little);
+        for (final data in chunkData) {
+          mixed += data.getInt16(offset, Endian.little);
         }
         outputData.setInt16(offset, mixed.clamp(-32768, 32767), Endian.little);
       }
@@ -577,7 +596,7 @@ class FfmpegStreamEngine extends ChangeNotifier
 
     _queueSlateFrame(socket, bytes);
     _slateTimer = Timer.periodic(
-      const Duration(milliseconds: 33),
+      _videoFrameInterval,
       (_) => _queueSlateFrame(socket, bytes),
     );
     await until;
@@ -597,7 +616,7 @@ class FfmpegStreamEngine extends ChangeNotifier
 
     _queueSlateFrame(socket, bytes);
     _slateTimer = Timer.periodic(
-      const Duration(milliseconds: 33),
+      _videoFrameInterval,
       (_) => _queueSlateFrame(socket, bytes),
     );
     await Future<void>.delayed(duration);
@@ -613,8 +632,13 @@ class FfmpegStreamEngine extends ChangeNotifier
       Duration.zero,
       socket,
       (error) => _recordTransportError('video', error),
+      frameRate: _frameRate,
     );
   }
+
+  Duration get _videoFrameInterval => Duration(
+    microseconds: (Duration.microsecondsPerSecond / _frameRate).round(),
+  );
 
   static const _fadeDuration = Duration(milliseconds: 600);
 
@@ -983,17 +1007,78 @@ class FfmpegStreamEngine extends ChangeNotifier
     return 'libx264';
   }
 
-  static String _videoEncoder(VideoEncoderPreference preference) {
+  static Future<String> _videoEncoder(
+    VideoEncoderPreference preference, {
+    required int width,
+    required int height,
+  }) async {
     if (preference == VideoEncoderPreference.software) return 'libx264';
-    // Media Foundation can advertise h264_mf even when the installed GPU
-    // driver cannot open it, returning AVERROR_EXTERNAL (-542398533) only
-    // after streaming has begun. Favor the deterministic low-CPU x264 path in
-    // Automatic mode on Windows; users can still explicitly opt into hardware
-    // encoding on systems where it has been verified.
-    if (Platform.isWindows && preference == VideoEncoderPreference.automatic) {
-      return 'libx264';
+    if (Platform.isWindows) {
+      final encoder = await _findWindowsHardwareEncoder(width, height);
+      if (encoder != null) return encoder;
+      if (preference == VideoEncoderPreference.automatic) return 'libx264';
+      throw StateError(
+        'No usable Windows hardware H.264 encoder was found. Church Streamer '
+        'tested NVIDIA NVENC, AMD AMF, Intel Quick Sync, and Media Foundation. '
+        'Update the graphics driver or package a full FFmpeg build, then try '
+        'again.',
+      );
     }
     return _defaultVideoEncoder;
+  }
+
+  static final Map<String, Future<String?>> _windowsHardwareEncoderProbes = {};
+
+  static Future<String?> _findWindowsHardwareEncoder(int width, int height) {
+    final key = '${width}x$height';
+    return _windowsHardwareEncoderProbes.putIfAbsent(
+      key,
+      () => _probeWindowsHardwareEncoders(width, height),
+    );
+  }
+
+  static Future<String?> _probeWindowsHardwareEncoders(
+    int width,
+    int height,
+  ) async {
+    // An encoder can be listed even though its driver or GPU session cannot be
+    // opened. Encode one frame at the requested output size with each path so
+    // a live stream—and especially a required 4K mode—never becomes the
+    // capability test.
+    for (final encoder in const [
+      'h264_nvenc',
+      'h264_amf',
+      'h264_qsv',
+      'h264_mf',
+    ]) {
+      for (final executable in _ffmpegCandidates) {
+        try {
+          final result = await Process.run(executable, [
+            '-hide_banner',
+            '-loglevel',
+            'error',
+            '-f',
+            'lavfi',
+            '-i',
+            'color=c=black:s=${width}x$height:r=1:d=0.04',
+            '-frames:v',
+            '1',
+            '-an',
+            '-c:v',
+            encoder,
+            if (encoder == 'h264_mf') ...['-hw_encoding', '1'],
+            '-f',
+            'null',
+            '-',
+          ]);
+          if (result.exitCode == 0) return encoder;
+          break;
+        } on ProcessException {
+          // Try the next executable candidate.
+        }
+      }
+    }
+    return null;
   }
 }
 
@@ -1083,16 +1168,18 @@ class _DelayedVideoQueue {
     Uint8List bytes,
     Duration delay,
     Socket socket,
-    void Function(Object error) onError,
-  ) {
+    void Function(Object error) onError, {
+    required int frameRate,
+  }) {
     _frames.add(_DelayedVideoFrame(bytes, DateTime.now().add(delay)));
-    // Retain enough frames for the user-selected delay, with only a small
-    // amount of scheduling headroom. If FFmpeg falls behind, discard the
-    // oldest frames instead of converting encoder load into ever-growing live
-    // latency. Camera capture is configured to at most 60 fps.
+    // Retain enough frames for the selected delay, plus two frames of
+    // scheduling headroom. Using the actual capture rate is important here:
+    // eight unnecessary 4K BGRA frames consume roughly 265 MB.
     final maxFrames = math.max(
-      8,
-      (delay.inMilliseconds * 60 / 1000).ceil() + 8,
+      2,
+      (delay.inMicroseconds * frameRate / Duration.microsecondsPerSecond)
+              .ceil() +
+          2,
     );
     while (_frames.length > maxFrames) {
       _frames.removeFirst();
@@ -1120,10 +1207,15 @@ class _DelayedVideoQueue {
       _schedule(socket, onError);
       return;
     }
-    // Drain in capture order for smooth motion. The bounded queue sheds its
-    // oldest frame only when the encoder remains saturated, while eight frames
-    // of jitter headroom absorb short Windows scheduling stalls.
-    final frame = _frames.removeFirst();
+    var frame = _frames.removeFirst();
+    // Once a write has taken longer than a frame interval, replaying every
+    // overdue frame only creates another stall and gives rawvideo misleading
+    // arrival timestamps. Keep the newest frame whose requested delay has
+    // elapsed; CFR output will duplicate the preceding frame for any missed
+    // interval instead of playing a burst of stale pictures.
+    while (_frames.isNotEmpty && !_frames.first.sendAt.isAfter(now)) {
+      frame = _frames.removeFirst();
+    }
     late final Future<void> write;
     write = _writeFrame(socket, frame.bytes, onError).whenComplete(() {
       if (identical(_pendingWrite, write)) _pendingWrite = null;
