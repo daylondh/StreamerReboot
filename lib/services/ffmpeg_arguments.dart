@@ -16,12 +16,6 @@ List<String> _buildFfmpegArguments({
   '-hide_banner',
   '-loglevel',
   'warning',
-  // The camera's advertised rate is often nominal (for example, "30 fps"
-  // hardware commonly delivers 30000/1001). Timestamp video from its arrival
-  // clock so that this small difference cannot accumulate into long-term
-  // drift. The video filter resets the epoch-based timestamps to zero.
-  '-use_wallclock_as_timestamps',
-  '1',
   '-f',
   'rawvideo',
   '-pixel_format',
@@ -46,6 +40,9 @@ List<String> _buildFfmpegArguments({
   '1:a:0',
   '-vf',
   [
+    // Rawvideo has no embedded timestamps. Let its demuxer generate a steady
+    // clock from -framerate; using pipe-arrival times here turns ordinary I/O
+    // scheduling jitter into visible frame drops and duplicates downstream.
     'setpts=PTS-STARTPTS',
     // Match the fill-style camera preview and YouTube's 16:9 player by
     // center-cropping non-widescreen sources instead of letterboxing them.

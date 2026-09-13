@@ -215,7 +215,7 @@ void main() {
     expect(arguments, containsAllInOrder(['-g', '48']));
   });
 
-  test('uses wall-clock video timing without rewriting audio timestamps', () {
+  test('uses steady rawvideo timing without rewriting audio timestamps', () {
     final arguments = FfmpegStreamEngine.buildArguments(
       audioPort: 41002,
       width: 1920,
@@ -225,15 +225,10 @@ void main() {
       ingestionUrl: 'rtmps://youtube.example/live/key',
     );
 
-    expect(
-      arguments.where((value) => value == '-use_wallclock_as_timestamps'),
-      hasLength(1),
-    );
-    final wallClockIndex = arguments.indexOf('-use_wallclock_as_timestamps');
     final videoInputIndex = arguments.indexOf('pipe:0');
     final audioInputIndex = arguments.indexOf('tcp://127.0.0.1:41002');
-    expect(wallClockIndex, lessThan(videoInputIndex));
     expect(videoInputIndex, lessThan(audioInputIndex));
+    expect(arguments, isNot(contains('-use_wallclock_as_timestamps')));
     expect(
       arguments,
       containsAllInOrder([
