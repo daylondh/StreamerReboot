@@ -98,11 +98,21 @@ Future<String?> _probeWindowsHardwareEncoders(int width, int height) async {
           '-c:v',
           encoder,
           if (encoder == 'h264_mf') ...['-hw_encoding', '1'],
+          '-pix_fmt',
+          _encoderPixelFormat(encoder),
           '-f',
           'null',
           '-',
         ]);
         if (result.exitCode == 0) return encoder;
+        final diagnostic = result.stderr.toString().trim().replaceAll(
+          RegExp(r'\s+'),
+          ' ',
+        );
+        logMessage(
+          '[FFmpeg] Hardware encoder probe failed for $encoder'
+          '${diagnostic.isEmpty ? '' : ': $diagnostic'}',
+        );
         break;
       } on ProcessException {
         // Try the next executable candidate.

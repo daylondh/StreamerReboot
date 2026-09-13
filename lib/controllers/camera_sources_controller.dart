@@ -127,8 +127,22 @@ class CameraSourcesController extends ChangeNotifier {
 
   Future<void> _initialize(CameraSource source) async {
     final preset = switch (captureResolution) {
+      // HDMI capture devices commonly advertise a scaled 720p media type that
+      // initializes successfully but delivers frames far below its nominal
+      // rate. Prefer the native 1080p mode on Windows; FFmpeg can cheaply
+      // downscale it to the selected stream output resolution afterward.
+      //
+      // camera_desktop 1.2.1's Windows backend still uses the older preset
+      // indices, where index 4 means 1080p. ResolutionPreset.ultraHigh is
+      // therefore the correct compatibility value for 1080p on that backend.
+      CameraCaptureResolution.automatic
+          when defaultTargetPlatform == TargetPlatform.windows =>
+        ResolutionPreset.ultraHigh,
       CameraCaptureResolution.automatic => ResolutionPreset.high,
       CameraCaptureResolution.p720 => ResolutionPreset.high,
+      CameraCaptureResolution.p1080
+          when defaultTargetPlatform == TargetPlatform.windows =>
+        ResolutionPreset.ultraHigh,
       CameraCaptureResolution.p1080 => ResolutionPreset.veryHigh,
       CameraCaptureResolution.maximum => ResolutionPreset.max,
     };

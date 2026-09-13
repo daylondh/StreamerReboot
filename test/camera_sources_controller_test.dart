@@ -62,7 +62,7 @@ void main() {
       await sources.discover();
       final retries = failure == 'Failed to enumerate camera media types';
       expect(attempts.length, retries ? 2 : 1);
-      expect(attempts.first.resolutionPreset, ResolutionPreset.high);
+      expect(attempts.first.resolutionPreset, ResolutionPreset.ultraHigh);
       if (retries) expect(attempts.last.resolutionPreset, ResolutionPreset.max);
       if (retries) {
         expect(
@@ -94,9 +94,31 @@ void main() {
 
     await sources.discover();
 
-    expect(selectedPreset, ResolutionPreset.veryHigh);
+    // camera_desktop 1.2.1 uses the legacy Windows preset indices, so index 4
+    // (ultraHigh in the current interface) is the backend's 1080p mode.
+    expect(selectedPreset, ResolutionPreset.ultraHigh);
     expect(selectedFps, 60);
     await sources.release();
     sources.dispose();
   });
+
+  test(
+    'automatic capture prefers the stable Windows 1080p media type',
+    () async {
+      ResolutionPreset? selectedPreset;
+      final sources = CameraSourcesController(
+        listCameras: () async => [camera],
+        createCamera: (_, preset, _) {
+          selectedPreset = preset;
+          return FakeCamera(preset, null);
+        },
+      );
+
+      await sources.discover();
+
+      expect(selectedPreset, ResolutionPreset.ultraHigh);
+      await sources.release();
+      sources.dispose();
+    },
+  );
 }

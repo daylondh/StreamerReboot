@@ -101,7 +101,7 @@ List<String> _buildFfmpegArguments({
   '-keyint_min',
   '${frameRate * 2}',
   '-pix_fmt',
-  'yuv420p',
+  _encoderPixelFormat(videoEncoder),
   '-c:a',
   'aac',
   '-b:a',
@@ -115,3 +115,11 @@ List<String> _buildFfmpegArguments({
   '[f=flv:flvflags=no_duration_filesize:onfail=abort]$ingestionUrl'
       '${outputPath == null ? '' : '|[f=mp4:movflags=+faststart:onfail=ignore]$outputPath'}',
 ];
+
+String _encoderPixelFormat(String videoEncoder) => switch (videoEncoder) {
+  // Windows hardware encoders do not consistently accept planar yuv420p.
+  // NV12 is the native/safest 4:2:0 input for Media Foundation, NVENC, AMF,
+  // and Quick Sync while remaining YouTube-compatible.
+  'h264_nvenc' || 'h264_amf' || 'h264_qsv' || 'h264_mf' => 'nv12',
+  _ => 'yuv420p',
+};

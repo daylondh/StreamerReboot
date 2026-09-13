@@ -97,11 +97,14 @@ void main() {
     );
 
     expect(nvenc, containsAllInOrder(['-preset', 'p1', '-tune', 'll']));
+    expect(nvenc, containsAllInOrder(['-pix_fmt', 'nv12']));
     expect(
       amf,
       containsAllInOrder(['-usage', 'lowlatency', '-quality', 'speed']),
     );
+    expect(amf, containsAllInOrder(['-pix_fmt', 'nv12']));
     expect(qsv, containsAllInOrder(['-preset', 'veryfast']));
+    expect(qsv, containsAllInOrder(['-pix_fmt', 'nv12']));
   });
 
   test('builds a YouTube-compatible FFmpeg tee pipeline', () {
@@ -176,6 +179,7 @@ void main() {
         'zerolatency',
       ]),
     );
+    expect(arguments, containsAllInOrder(['-pix_fmt', 'yuv420p']));
   });
 
   test('adds an aspect-preserving FFmpeg downscale filter', () {
