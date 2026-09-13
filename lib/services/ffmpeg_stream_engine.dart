@@ -66,9 +66,8 @@ class FfmpegStreamEngine extends ChangeNotifier
   Process? _process;
   CameraController? _camera;
   String? _activeCameraName;
-  Socket? _videoSocket;
+  IOSink? _videoSink;
   Socket? _audioSocket;
-  ServerSocket? _videoServer;
   ServerSocket? _audioServer;
   Timer? _audioTimer;
   Timer? _slateTimer;
@@ -162,9 +161,7 @@ class FfmpegStreamEngine extends ChangeNotifier
         );
       }
 
-      _videoServer = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
       _audioServer = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
-      final videoConnection = _videoServer!.first;
       final audioConnection = _audioServer!.first;
       _outputPath = session.recordLocally
           ? await _createOutputPath(session)
@@ -177,7 +174,6 @@ class FfmpegStreamEngine extends ChangeNotifier
       );
       logMessage('[FFmpeg] Selected video encoder: $videoEncoder');
       final arguments = buildArguments(
-        videoPort: _videoServer!.port,
         audioPort: _audioServer!.port,
         width: frame.width,
         height: frame.height,
@@ -192,6 +188,10 @@ class FfmpegStreamEngine extends ChangeNotifier
       );
       final process = await _processStarter(arguments);
       _process = process;
+      // Raw 1080p BGRA is roughly 249 MB/s at 30 fps. Feed it through the
+      // process's native stdin pipe instead of routing it through loopback TCP.
+      _videoSink = process.stdin;
+      _consumeSinkErrors(_videoSink!, 'video');
       _stderrSubscription = process.stderr
           .transform(utf8.decoder)
           .transform(const LineSplitter())
@@ -201,13 +201,9 @@ class FfmpegStreamEngine extends ChangeNotifier
             if (_stderr.length > 30) _stderr.removeAt(0);
             logMessage('[FFmpeg] $diagnostic');
           });
-      _videoSocket = await videoConnection.timeout(const Duration(seconds: 5));
       _audioSocket = await audioConnection.timeout(const Duration(seconds: 5));
-      _consumeSocketErrors(_videoSocket!, 'video');
       _consumeSocketErrors(_audioSocket!, 'audio');
-      await _videoServer?.close();
       await _audioServer?.close();
-      _videoServer = null;
       _audioServer = null;
       _startAudioMixer();
       final startupSlate = _startupSlate;
@@ -325,7 +321,6 @@ class FfmpegStreamEngine extends ChangeNotifier
 
   @visibleForTesting
   static List<String> buildArguments({
-    required int videoPort,
     required int audioPort,
     required int width,
     required int height,
@@ -338,7 +333,6 @@ class FfmpegStreamEngine extends ChangeNotifier
     int videoBitrate = 4500,
     int frameRate = 30,
   }) => _buildFfmpegArguments(
-    videoPort: videoPort,
     audioPort: audioPort,
     width: width,
     height: height,

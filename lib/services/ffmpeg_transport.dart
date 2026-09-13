@@ -1,6 +1,14 @@
 part of 'ffmpeg_stream_engine.dart';
 
 extension _FfmpegTransport on FfmpegStreamEngine {
+  void _consumeSinkErrors(IOSink sink, String channel) {
+    unawaited(
+      sink.done.catchError((Object error, StackTrace stackTrace) {
+        _recordTransportError(channel, error);
+      }),
+    );
+  }
+
   void _consumeSocketErrors(Socket socket, String channel) {
     socket.listen(
       (_) {},
@@ -68,14 +76,26 @@ extension _FfmpegTransport on FfmpegStreamEngine {
     if (camera?.value.isStreamingImages ?? false) {
       await _ignoreCleanup(camera!.stopImageStream(), 'camera image stream');
     }
-    await _closeSocket(_videoSocket, 'video socket');
+    await _closeSink(_videoSink, 'video pipe');
     await _closeSocket(_audioSocket, 'audio socket');
-    await _ignoreCleanup(_videoServer?.close(), 'video server');
     await _ignoreCleanup(_audioServer?.close(), 'audio server');
-    _videoSocket = null;
+    _videoSink = null;
     _audioSocket = null;
-    _videoServer = null;
     _audioServer = null;
+  }
+
+  Future<void> _closeSink(IOSink? sink, String resource) async {
+    if (sink == null) return;
+    try {
+      await sink.close().timeout(FfmpegStreamEngine._cleanupTimeout);
+    } on TimeoutException {
+      logMessage(
+        '[FFmpeg cleanup] $resource did not finish within '
+        '${FfmpegStreamEngine._cleanupTimeout.inSeconds} seconds; continuing shutdown.',
+      );
+    } catch (error) {
+      _recordTransportError(resource, error);
+    }
   }
 
   Future<void> _closeSocket(Socket? socket, String resource) async {
@@ -95,10 +115,10 @@ extension _FfmpegTransport on FfmpegStreamEngine {
   }
 
   Future<void> _flushVideoFeed() async {
-    final socket = _videoSocket;
-    if (socket == null) return;
+    final sink = _videoSink;
+    if (sink == null) return;
     try {
-      await socket.flush().timeout(const Duration(seconds: 15));
+      await sink.flush().timeout(const Duration(seconds: 15));
     } on TimeoutException {
       logMessage(
         '[Splash] Video feed did not drain within 15 seconds; '

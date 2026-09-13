@@ -18,16 +18,16 @@ extension _FfmpegSlatePipeline on FfmpegStreamEngine {
   }
 
   Future<void> _playSlateUntil(Uint8List bytes, Future<void> until) async {
-    final socket = _videoSocket;
-    if (socket == null) return;
+    final sink = _videoSink;
+    if (sink == null) return;
     _slateTimer?.cancel();
     _videoQueue.clear();
     _slateActive = true;
 
-    _queueSlateFrame(socket, bytes);
+    _queueSlateFrame(sink, bytes);
     _slateTimer = Timer.periodic(
       _videoFrameInterval,
-      (_) => _queueSlateFrame(socket, bytes),
+      (_) => _queueSlateFrame(sink, bytes),
     );
     await until;
   }
@@ -37,17 +37,17 @@ extension _FfmpegSlatePipeline on FfmpegStreamEngine {
     Duration duration, {
     bool keepActive = false,
   }) async {
-    final socket = _videoSocket;
-    if (socket == null) return;
+    final sink = _videoSink;
+    if (sink == null) return;
     _slateTimer?.cancel();
     final generation = ++_slateGeneration;
     _videoQueue.clear();
     _slateActive = true;
 
-    _queueSlateFrame(socket, bytes);
+    _queueSlateFrame(sink, bytes);
     _slateTimer = Timer.periodic(
       _videoFrameInterval,
-      (_) => _queueSlateFrame(socket, bytes),
+      (_) => _queueSlateFrame(sink, bytes),
     );
     await Future<void>.delayed(duration);
     if (generation != _slateGeneration) return;
@@ -56,11 +56,11 @@ extension _FfmpegSlatePipeline on FfmpegStreamEngine {
     if (!keepActive) _slateActive = false;
   }
 
-  void _queueSlateFrame(Socket socket, Uint8List bytes) {
+  void _queueSlateFrame(IOSink sink, Uint8List bytes) {
     _videoQueue.add(
       bytes,
       Duration.zero,
-      socket,
+      sink,
       (error) => _recordTransportError('video', error),
       frameRate: _frameRate,
     );

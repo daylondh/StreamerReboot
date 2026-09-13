@@ -1,7 +1,6 @@
 part of 'ffmpeg_stream_engine.dart';
 
 List<String> _buildFfmpegArguments({
-  required int videoPort,
   required int audioPort,
   required int width,
   required int height,
@@ -32,7 +31,7 @@ List<String> _buildFfmpegArguments({
   '-framerate',
   '$frameRate',
   '-i',
-  'tcp://127.0.0.1:$videoPort',
+  'pipe:0',
   '-f',
   's16le',
   '-ar',

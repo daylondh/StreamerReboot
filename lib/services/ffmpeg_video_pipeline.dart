@@ -2,8 +2,8 @@ part of 'ffmpeg_stream_engine.dart';
 
 extension _FfmpegVideoPipeline on FfmpegStreamEngine {
   void _writeVideoFrame(CameraImage frame) {
-    final socket = _videoSocket;
-    if (socket == null || frame.planes.isEmpty || _slateActive) return;
+    final sink = _videoSink;
+    if (sink == null || frame.planes.isEmpty || _slateActive) return;
     final targetWidth = _frameWidth;
     final targetHeight = _frameHeight;
     final targetFormat = _pixelFormat;
@@ -40,7 +40,7 @@ extension _FfmpegVideoPipeline on FfmpegStreamEngine {
       _videoQueue.add(
         _applyFade(bytes),
         videoDelay,
-        socket,
+        sink,
         (error) => _recordTransportError('video', error),
         frameRate: _frameRate,
       );

@@ -27,7 +27,6 @@ void main() {
 
   test('preserves 4K capture dimensions in the Windows encoder input', () {
     final arguments = FfmpegStreamEngine.buildArguments(
-      videoPort: 41001,
       audioPort: 41002,
       width: 3840,
       height: 2160,
@@ -44,7 +43,6 @@ void main() {
 
   test('forces Windows hardware encoding only when explicitly requested', () {
     final arguments = FfmpegStreamEngine.buildArguments(
-      videoPort: 41001,
       audioPort: 41002,
       width: 1280,
       height: 720,
@@ -69,7 +67,6 @@ void main() {
 
   test('uses low-latency vendor hardware encoder options', () {
     final nvenc = FfmpegStreamEngine.buildArguments(
-      videoPort: 41001,
       audioPort: 41002,
       width: 1920,
       height: 1080,
@@ -78,7 +75,6 @@ void main() {
       ingestionUrl: 'rtmps://youtube.example/live/key',
     );
     final amf = FfmpegStreamEngine.buildArguments(
-      videoPort: 41001,
       audioPort: 41002,
       width: 1920,
       height: 1080,
@@ -87,7 +83,6 @@ void main() {
       ingestionUrl: 'rtmps://youtube.example/live/key',
     );
     final qsv = FfmpegStreamEngine.buildArguments(
-      videoPort: 41001,
       audioPort: 41002,
       width: 1920,
       height: 1080,
@@ -109,7 +104,6 @@ void main() {
 
   test('builds a YouTube-compatible FFmpeg tee pipeline', () {
     final arguments = FfmpegStreamEngine.buildArguments(
-      videoPort: 41001,
       audioPort: 41002,
       width: 1280,
       height: 720,
@@ -121,7 +115,7 @@ void main() {
 
     expect(arguments, containsAllInOrder(['-f', 'rawvideo']));
     expect(arguments, containsAllInOrder(['-video_size', '1280x720']));
-    expect(arguments, contains('tcp://127.0.0.1:41001'));
+    expect(arguments, contains('pipe:0'));
     expect(arguments, contains('tcp://127.0.0.1:41002'));
     expect(arguments, containsAllInOrder(['-c:v', 'libx264']));
     expect(arguments, containsAllInOrder(['-c:a', 'aac']));
@@ -137,7 +131,6 @@ void main() {
 
   test('allows VideoToolbox software fallback on macOS', () {
     final arguments = FfmpegStreamEngine.buildArguments(
-      videoPort: 41001,
       audioPort: 41002,
       width: 1280,
       height: 720,
@@ -153,7 +146,6 @@ void main() {
 
   test('publishes without adding a local recording output', () {
     final arguments = FfmpegStreamEngine.buildArguments(
-      videoPort: 41001,
       audioPort: 41002,
       width: 1280,
       height: 720,
@@ -184,7 +176,6 @@ void main() {
 
   test('adds an aspect-preserving FFmpeg downscale filter', () {
     final arguments = FfmpegStreamEngine.buildArguments(
-      videoPort: 41001,
       audioPort: 41002,
       width: 3840,
       height: 2160,
@@ -206,7 +197,6 @@ void main() {
 
   test('applies selected bitrate and frame rate to FFmpeg', () {
     final arguments = FfmpegStreamEngine.buildArguments(
-      videoPort: 41001,
       audioPort: 41002,
       width: 1920,
       height: 1080,
@@ -227,7 +217,6 @@ void main() {
 
   test('uses wall-clock video timing without rewriting audio timestamps', () {
     final arguments = FfmpegStreamEngine.buildArguments(
-      videoPort: 41001,
       audioPort: 41002,
       width: 1920,
       height: 1080,
@@ -241,7 +230,7 @@ void main() {
       hasLength(1),
     );
     final wallClockIndex = arguments.indexOf('-use_wallclock_as_timestamps');
-    final videoInputIndex = arguments.indexOf('tcp://127.0.0.1:41001');
+    final videoInputIndex = arguments.indexOf('pipe:0');
     final audioInputIndex = arguments.indexOf('tcp://127.0.0.1:41002');
     expect(wallClockIndex, lessThan(videoInputIndex));
     expect(videoInputIndex, lessThan(audioInputIndex));

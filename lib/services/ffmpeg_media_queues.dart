@@ -85,7 +85,7 @@ class _DelayedVideoQueue {
   void add(
     Uint8List bytes,
     Duration delay,
-    Socket socket,
+    IOSink sink,
     void Function(Object error) onError, {
     required int frameRate,
   }) {
@@ -102,27 +102,27 @@ class _DelayedVideoQueue {
     while (_frames.length > maxFrames) {
       _frames.removeFirst();
     }
-    _schedule(socket, onError);
+    _schedule(sink, onError);
   }
 
-  void _schedule(Socket socket, void Function(Object error) onError) {
+  void _schedule(IOSink sink, void Function(Object error) onError) {
     _timer?.cancel();
     _timer = null;
     if (_pendingWrite != null) return;
     if (_frames.isEmpty) return;
     final wait = _frames.first.sendAt.difference(DateTime.now());
     if (wait.isNegative || wait == Duration.zero) {
-      _writeNextDueFrame(socket, onError);
+      _writeNextDueFrame(sink, onError);
     } else {
-      _timer = Timer(wait, () => _writeNextDueFrame(socket, onError));
+      _timer = Timer(wait, () => _writeNextDueFrame(sink, onError));
     }
   }
 
-  void _writeNextDueFrame(Socket socket, void Function(Object error) onError) {
+  void _writeNextDueFrame(IOSink sink, void Function(Object error) onError) {
     if (_pendingWrite != null || _frames.isEmpty) return;
     final now = DateTime.now();
     if (_frames.first.sendAt.isAfter(now)) {
-      _schedule(socket, onError);
+      _schedule(sink, onError);
       return;
     }
     var frame = _frames.removeFirst();
@@ -135,22 +135,22 @@ class _DelayedVideoQueue {
       frame = _frames.removeFirst();
     }
     late final Future<void> write;
-    write = _writeFrame(socket, frame.bytes, onError).whenComplete(() {
+    write = _writeFrame(sink, frame.bytes, onError).whenComplete(() {
       if (identical(_pendingWrite, write)) _pendingWrite = null;
-      _schedule(socket, onError);
+      _schedule(sink, onError);
     });
     _pendingWrite = write;
     unawaited(write);
   }
 
   Future<void> _writeFrame(
-    Socket socket,
+    IOSink sink,
     Uint8List bytes,
     void Function(Object error) onError,
   ) async {
     try {
-      socket.add(bytes);
-      await socket.flush();
+      sink.add(bytes);
+      await sink.flush();
     } catch (error) {
       onError(error);
     }
