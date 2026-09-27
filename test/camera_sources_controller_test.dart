@@ -102,6 +102,28 @@ void main() {
     sources.dispose();
   });
 
+  test('camera delay supports and persists up to 1500 ms', () async {
+    CameraSourcesController createSources() => CameraSourcesController(
+      listCameras: () async => [camera],
+      createCamera: (_, preset, _) => FakeCamera(preset, null),
+    );
+
+    final sources = createSources();
+    await sources.discover();
+    sources.setDelay(sources.sources.single, 1500);
+    expect(sources.sources.single.delayMs, 1500);
+    sources.setDelay(sources.sources.single, 1600);
+    expect(sources.sources.single.delayMs, 1500);
+    await sources.release();
+    sources.dispose();
+
+    final restoredSources = createSources();
+    await restoredSources.discover();
+    expect(restoredSources.sources.single.delayMs, 1500);
+    await restoredSources.release();
+    restoredSources.dispose();
+  });
+
   test(
     'automatic capture prefers the stable Windows 1080p media type',
     () async {

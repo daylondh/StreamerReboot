@@ -167,10 +167,12 @@ class _DelayControl extends StatelessWidget {
     required this.delayMs,
     required this.onChanged,
     this.dark = false,
+    this.maxDelayMs = 1000,
   });
   final int delayMs;
   final ValueChanged<int> onChanged;
   final bool dark;
+  final int maxDelayMs;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -192,8 +194,8 @@ class _DelayControl extends StatelessWidget {
             child: Slider(
               value: delayMs.toDouble(),
               min: 0,
-              max: 1000,
-              divisions: 20,
+              max: maxDelayMs.toDouble(),
+              divisions: maxDelayMs ~/ 50,
               label: '$delayMs ms',
               onChanged: (value) => onChanged(value.round()),
             ),
@@ -203,8 +205,8 @@ class _DelayControl extends StatelessWidget {
             child: Slider(
               value: delayMs.toDouble(),
               min: 0,
-              max: 1000,
-              divisions: 20,
+              max: maxDelayMs.toDouble(),
+              divisions: maxDelayMs ~/ 50,
               label: '$delayMs ms',
               onChanged: (value) => onChanged(value.round()),
             ),

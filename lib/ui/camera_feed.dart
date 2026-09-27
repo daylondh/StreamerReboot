@@ -110,6 +110,7 @@ class _CameraFeed extends StatelessWidget {
                 delayMs: source.delayMs,
                 onChanged: onDelayChanged,
                 dark: true,
+                maxDelayMs: CameraSourcesController.maxDelayMs,
               ),
             ),
           ],

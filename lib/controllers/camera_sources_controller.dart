@@ -23,6 +23,8 @@ class CameraSource {
 }
 
 class CameraSourcesController extends ChangeNotifier {
+  static const maxDelayMs = 1500;
+
   CameraSourcesController({
     Future<List<CameraDescription>> Function()? listCameras,
     CameraFactory? createCamera,
@@ -60,7 +62,7 @@ class CameraSourcesController extends ChangeNotifier {
   String? get discoveryError => _discoveryError;
 
   void setDelay(CameraSource source, int delayMs) {
-    source.delayMs = delayMs.clamp(0, 1000);
+    source.delayMs = delayMs.clamp(0, maxDelayMs);
     notifyListeners();
     _saveDelays();
   }
@@ -80,7 +82,7 @@ class CameraSourcesController extends ChangeNotifier {
           final source = CameraSource(description: camera);
           final savedDelay = _persistedDelays[camera.name];
           if (savedDelay is num) {
-            source.delayMs = savedDelay.round().clamp(0, 1000);
+            source.delayMs = savedDelay.round().clamp(0, maxDelayMs);
           }
           return source;
         }),
