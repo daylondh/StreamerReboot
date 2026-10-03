@@ -84,6 +84,30 @@ class DelayedVideoQueue {
   Future<void>? _pendingWrite;
   DateTime? _lastAcceptedAt;
 
+  void prime(
+    Uint8List bytes,
+    Duration duration,
+    IOSink sink,
+    void Function(Object error) onError, {
+    required int frameRate,
+  }) {
+    if (duration <= Duration.zero) return;
+    final now = DateTime.now();
+    final frameInterval = Duration(
+      microseconds: (Duration.microsecondsPerSecond / frameRate).round(),
+    );
+    for (
+      var offset = Duration.zero;
+      offset < duration;
+      offset += frameInterval
+    ) {
+      // Every entry can share the same placeholder buffer. Only the small
+      // timestamp objects are repeated for the duration of the pre-roll.
+      _frames.add(_DelayedVideoFrame(bytes, now.add(offset)));
+    }
+    _schedule(sink, onError);
+  }
+
   void add(
     Uint8List bytes,
     Duration delay,
@@ -107,7 +131,7 @@ class DelayedVideoQueue {
     _lastAcceptedAt = now;
     _frames.add(_DelayedVideoFrame(bytes, now.add(delay)));
     // Retain enough frames for the selected delay, plus two frames of
-    // scheduling headroom. Using the actual capture rate is important here:
+    // scheduling headroom. Using the configured output rate is important here:
     // eight unnecessary 4K BGRA frames consume roughly 265 MB.
     final maxFrames = math.max(
       2,

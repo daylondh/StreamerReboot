@@ -1,6 +1,40 @@
 part of 'ffmpeg_stream_engine.dart';
 
 extension _FfmpegVideoPipeline on FfmpegStreamEngine {
+  Duration get _activeVideoDelay {
+    final cameraName = _activeCameraName;
+    return Duration(
+      milliseconds: cameraName == null ? 0 : cameraDelayForName(cameraName),
+    );
+  }
+
+  void _primeVideoPlaceholder(Uint8List bytes) {
+    final sink = _videoSink;
+    final delay = _activeVideoDelay;
+    if (sink == null || delay <= Duration.zero) return;
+    _videoQueue.prime(
+      bytes,
+      delay,
+      sink,
+      (error) => _recordTransportError('video', error),
+      frameRate: _frameRate,
+    );
+  }
+
+  void _primeVideoInput(CameraImage firstFrame) {
+    if (_activeVideoDelay > Duration.zero) {
+      // Raw inputs receive independent timestamps beginning at zero. Without
+      // video pre-roll, FFmpeg labels the first delayed camera frame as video
+      // time zero and aligns it with audio time zero, effectively delaying
+      // both. Black frames advance only the video timeline while real camera
+      // frames remain buffered for the requested offset.
+      _primeVideoPlaceholder(
+        Uint8List(firstFrame.width * firstFrame.height * 4),
+      );
+    }
+    _writeVideoFrame(firstFrame);
+  }
+
   void _writeVideoFrame(CameraImage frame) {
     final sink = _videoSink;
     if (sink == null || frame.planes.isEmpty || _slateActive) return;
@@ -11,10 +45,6 @@ extension _FfmpegVideoPipeline on FfmpegStreamEngine {
       return;
     }
     final plane = frame.planes.first;
-    final cameraName = _activeCameraName;
-    final videoDelay = Duration(
-      milliseconds: cameraName == null ? 0 : cameraDelayForName(cameraName),
-    );
     final rowBytes = frame.width * 4;
     try {
       final sourceFormat = _cameraPixelFormat(frame);
@@ -39,7 +69,7 @@ extension _FfmpegVideoPipeline on FfmpegStreamEngine {
       }
       _videoQueue.add(
         _applyFade(bytes),
-        videoDelay,
+        _activeVideoDelay,
         sink,
         (error) => _recordTransportError('video', error),
         frameRate: _frameRate,

@@ -55,6 +55,39 @@ void main() {
     },
   );
 
+  test('video delay primes the video timeline before camera frames', () async {
+    final received = <List<int>>[];
+    final controller = StreamController<List<int>>();
+    final subscription = controller.stream.listen(received.add);
+    final sink = IOSink(controller.sink);
+    final queue = DelayedVideoQueue();
+
+    queue.prime(
+      Uint8List.fromList([0]),
+      const Duration(milliseconds: 90),
+      sink,
+      (error) => fail('Unexpected video pre-roll error: $error'),
+      frameRate: 30,
+    );
+    queue.add(
+      Uint8List.fromList([1]),
+      const Duration(milliseconds: 90),
+      sink,
+      (error) => fail('Unexpected delayed video write error: $error'),
+      frameRate: 30,
+    );
+
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(received, isNotEmpty);
+    expect(received, everyElement([0]));
+
+    await Future<void>.delayed(const Duration(milliseconds: 70));
+    expect(received, contains(equals([1])));
+    queue.clear();
+    await sink.close();
+    await subscription.cancel();
+  });
+
   test('preserves 4K capture dimensions in the Windows encoder input', () {
     final arguments = FfmpegStreamEngine.buildArguments(
       audioPort: 41002,

@@ -76,6 +76,7 @@ extension _FfmpegSlatePipeline on FfmpegStreamEngine {
     _slateTimer?.cancel();
     _slateTimer = null;
     _videoQueue.clear();
+    if (!toSlate) _primeVideoPlaceholder(slate);
     _fadeSlate = slate;
     _fadeStartedAt = DateTime.now();
     _fadingToSlate = toSlate;

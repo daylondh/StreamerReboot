@@ -192,6 +192,7 @@ class FfmpegStreamEngine extends ChangeNotifier
       // process's native stdin pipe instead of routing it through loopback TCP.
       _videoSink = process.stdin;
       _consumeSinkErrors(_videoSink!, 'video');
+      _primeVideoInput(frame);
       _stderrSubscription = process.stderr
           .transform(utf8.decoder)
           .transform(const LineSplitter())
@@ -243,6 +244,7 @@ class FfmpegStreamEngine extends ChangeNotifier
     _camera = next;
     _activeCameraName = cameraName;
     _videoQueue.clear();
+    _primeVideoPlaceholder(Uint8List(_frameWidth! * _frameHeight! * 4));
     try {
       var describedFormat = false;
       await next.startImageStream((frame) {
@@ -259,6 +261,8 @@ class FfmpegStreamEngine extends ChangeNotifier
     } catch (_) {
       _camera = previous;
       _activeCameraName = previousName;
+      _videoQueue.clear();
+      _primeVideoPlaceholder(Uint8List(_frameWidth! * _frameHeight! * 4));
       await previous.startImageStream(_writeVideoFrame);
       rethrow;
     }
