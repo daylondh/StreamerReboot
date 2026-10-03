@@ -77,10 +77,12 @@ class PcmQueue {
   }
 }
 
-class _DelayedVideoQueue {
+@visibleForTesting
+class DelayedVideoQueue {
   final Queue<_DelayedVideoFrame> _frames = Queue<_DelayedVideoFrame>();
   Timer? _timer;
   Future<void>? _pendingWrite;
+  DateTime? _lastAcceptedAt;
 
   void add(
     Uint8List bytes,
@@ -89,7 +91,21 @@ class _DelayedVideoQueue {
     void Function(Object error) onError, {
     required int frameRate,
   }) {
-    _frames.add(_DelayedVideoFrame(bytes, DateTime.now().add(delay)));
+    final now = DateTime.now();
+    final frameInterval = Duration(
+      microseconds: (Duration.microsecondsPerSecond / frameRate).round(),
+    );
+    final lastAcceptedAt = _lastAcceptedAt;
+    // Camera callbacks can arrive faster than the configured output rate. If
+    // every callback is retained, the count-based bound below continually
+    // evicts the oldest frame before its delay expires and no video is ever
+    // delivered. Sample at the output rate so queued frames can become due.
+    if (lastAcceptedAt != null &&
+        now.difference(lastAcceptedAt) < frameInterval) {
+      return;
+    }
+    _lastAcceptedAt = now;
+    _frames.add(_DelayedVideoFrame(bytes, now.add(delay)));
     // Retain enough frames for the selected delay, plus two frames of
     // scheduling headroom. Using the actual capture rate is important here:
     // eight unnecessary 4K BGRA frames consume roughly 265 MB.
@@ -106,15 +122,17 @@ class _DelayedVideoQueue {
   }
 
   void _schedule(IOSink sink, void Function(Object error) onError) {
-    _timer?.cancel();
-    _timer = null;
     if (_pendingWrite != null) return;
+    if (_timer != null) return;
     if (_frames.isEmpty) return;
     final wait = _frames.first.sendAt.difference(DateTime.now());
     if (wait.isNegative || wait == Duration.zero) {
       _writeNextDueFrame(sink, onError);
     } else {
-      _timer = Timer(wait, () => _writeNextDueFrame(sink, onError));
+      _timer = Timer(wait, () {
+        _timer = null;
+        _writeNextDueFrame(sink, onError);
+      });
     }
   }
 
@@ -160,6 +178,7 @@ class _DelayedVideoQueue {
     _timer?.cancel();
     _timer = null;
     _frames.clear();
+    _lastAcceptedAt = null;
   }
 }
 

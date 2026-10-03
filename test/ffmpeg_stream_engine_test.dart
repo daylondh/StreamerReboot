@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -24,6 +26,34 @@ void main() {
     queue.add(Uint8List.fromList([5, 6]));
     expect(queue.takeDelayed(2, 4), [1, 2]);
   });
+
+  test(
+    'video delay delivers frames when capture exceeds output rate',
+    () async {
+      final received = <List<int>>[];
+      final controller = StreamController<List<int>>();
+      final subscription = controller.stream.listen(received.add);
+      final sink = IOSink(controller.sink);
+      final queue = DelayedVideoQueue();
+      final pump = Timer.periodic(const Duration(milliseconds: 5), (timer) {
+        queue.add(
+          Uint8List.fromList([timer.tick]),
+          const Duration(milliseconds: 40),
+          sink,
+          (error) => fail('Unexpected delayed video write error: $error'),
+          frameRate: 10,
+        );
+      });
+
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+
+      expect(received, isNotEmpty);
+      pump.cancel();
+      queue.clear();
+      await sink.close();
+      await subscription.cancel();
+    },
+  );
 
   test('preserves 4K capture dimensions in the Windows encoder input', () {
     final arguments = FfmpegStreamEngine.buildArguments(

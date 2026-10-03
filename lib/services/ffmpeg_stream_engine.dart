@@ -72,7 +72,7 @@ class FfmpegStreamEngine extends ChangeNotifier
   Timer? _audioTimer;
   Timer? _slateTimer;
   int _slateGeneration = 0;
-  final _DelayedVideoQueue _videoQueue = _DelayedVideoQueue();
+  final DelayedVideoQueue _videoQueue = DelayedVideoQueue();
   bool _slateActive = false;
   Uint8List? _startupSlate;
   Uint8List? _shutdownSlate;
