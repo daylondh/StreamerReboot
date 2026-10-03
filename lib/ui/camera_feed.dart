@@ -6,6 +6,7 @@ class _CameraFeed extends StatelessWidget {
     required this.number,
     required this.isSelected,
     required this.isSwitching,
+    required this.delayEnabled,
     required this.onSelect,
     required this.onDelayChanged,
   });
@@ -13,6 +14,7 @@ class _CameraFeed extends StatelessWidget {
   final int number;
   final bool isSelected;
   final bool isSwitching;
+  final bool delayEnabled;
   final VoidCallback onSelect;
   final ValueChanged<int> onDelayChanged;
 
@@ -109,6 +111,7 @@ class _CameraFeed extends StatelessWidget {
               child: _DelayControl(
                 delayMs: source.delayMs,
                 onChanged: onDelayChanged,
+                enabled: delayEnabled,
                 dark: true,
                 maxDelayMs: CameraSourcesController.maxDelayMs,
               ),

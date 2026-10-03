@@ -79,34 +79,20 @@ class PcmQueue {
 
 @visibleForTesting
 class DelayedVideoQueue {
+  DelayedVideoQueue({DateTime Function()? now}) : _now = now ?? DateTime.now;
+
+  final DateTime Function() _now;
   final Queue<_DelayedVideoFrame> _frames = Queue<_DelayedVideoFrame>();
   Timer? _timer;
-  Future<void>? _pendingWrite;
-  DateTime? _lastAcceptedAt;
+  DateTime? _nextAcceptedAt;
+  Uint8List? _lastOutput;
+  Duration _delay = Duration.zero;
+  IOSink? _sink;
+  void Function(Object error)? _onError;
+  int? _frameRate;
 
-  void prime(
-    Uint8List bytes,
-    Duration duration,
-    IOSink sink,
-    void Function(Object error) onError, {
-    required int frameRate,
-  }) {
-    if (duration <= Duration.zero) return;
-    final now = DateTime.now();
-    final frameInterval = Duration(
-      microseconds: (Duration.microsecondsPerSecond / frameRate).round(),
-    );
-    for (
-      var offset = Duration.zero;
-      offset < duration;
-      offset += frameInterval
-    ) {
-      // Every entry can share the same placeholder buffer. Only the small
-      // timestamp objects are repeated for the duration of the pre-roll.
-      _frames.add(_DelayedVideoFrame(bytes, now.add(offset)));
-    }
-    _schedule(sink, onError);
-  }
+  @visibleForTesting
+  int get bufferedFrameCount => _frames.length;
 
   void add(
     Uint8List bytes,
@@ -115,21 +101,37 @@ class DelayedVideoQueue {
     void Function(Object error) onError, {
     required int frameRate,
   }) {
-    final now = DateTime.now();
+    final now = _now();
     final frameInterval = Duration(
       microseconds: (Duration.microsecondsPerSecond / frameRate).round(),
     );
-    final lastAcceptedAt = _lastAcceptedAt;
+    _delay = delay;
+    _sink = sink;
+    _onError = onError;
+    if (_frameRate != frameRate) {
+      _timer?.cancel();
+      _timer = null;
+      _frameRate = frameRate;
+    }
+    final nextAcceptedAt = _nextAcceptedAt;
     // Camera callbacks can arrive faster than the configured output rate. If
     // every callback is retained, the count-based bound below continually
     // evicts the oldest frame before its delay expires and no video is ever
-    // delivered. Sample at the output rate so queued frames can become due.
-    if (lastAcceptedAt != null &&
-        now.difference(lastAcceptedAt) < frameInterval) {
+    // delivered. Sample at the output rate, but allow ordinary capture-clock
+    // jitter so a nominal 30 fps camera arriving just under every 33.33 ms
+    // does not get accidentally reduced to 15 fps.
+    final earlyTolerance = Duration(
+      microseconds: frameInterval.inMicroseconds ~/ 5,
+    );
+    if (nextAcceptedAt != null &&
+        now.isBefore(nextAcceptedAt.subtract(earlyTolerance))) {
       return;
     }
-    _lastAcceptedAt = now;
-    _frames.add(_DelayedVideoFrame(bytes, now.add(delay)));
+    _nextAcceptedAt =
+        nextAcceptedAt == null || now.difference(nextAcceptedAt) > frameInterval
+        ? now.add(frameInterval)
+        : nextAcceptedAt.add(frameInterval);
+    _frames.add(_DelayedVideoFrame(bytes, now));
     // Retain enough frames for the selected delay, plus two frames of
     // scheduling headroom. Using the configured output rate is important here:
     // eight unnecessary 4K BGRA frames consume roughly 265 MB.
@@ -142,72 +144,59 @@ class DelayedVideoQueue {
     while (_frames.length > maxFrames) {
       _frames.removeFirst();
     }
-    _schedule(sink, onError);
+    _startClock(frameInterval);
   }
 
-  void _schedule(IOSink sink, void Function(Object error) onError) {
-    if (_pendingWrite != null) return;
+  void _startClock(Duration frameInterval) {
     if (_timer != null) return;
-    if (_frames.isEmpty) return;
-    final wait = _frames.first.sendAt.difference(DateTime.now());
-    if (wait.isNegative || wait == Duration.zero) {
-      _writeNextDueFrame(sink, onError);
-    } else {
-      _timer = Timer(wait, () {
-        _timer = null;
-        _writeNextDueFrame(sink, onError);
-      });
-    }
+    _emitFrame();
+    _timer = Timer.periodic(frameInterval, (_) => _emitFrame());
   }
 
-  void _writeNextDueFrame(IOSink sink, void Function(Object error) onError) {
-    if (_pendingWrite != null || _frames.isEmpty) return;
-    final now = DateTime.now();
-    if (_frames.first.sendAt.isAfter(now)) {
-      _schedule(sink, onError);
-      return;
+  void _emitFrame() {
+    final sink = _sink;
+    final onError = _onError;
+    if (sink == null || onError == null) return;
+    final targetCaptureTime = _now().subtract(_delay);
+    Uint8List? selected;
+    while (_frames.isNotEmpty &&
+        !_frames.first.capturedAt.isAfter(targetCaptureTime)) {
+      selected = _frames.removeFirst().bytes;
     }
-    var frame = _frames.removeFirst();
-    // Once a write has taken longer than a frame interval, replaying every
-    // overdue frame only creates another stall and gives rawvideo misleading
-    // arrival timestamps. Keep the newest frame whose requested delay has
-    // elapsed; CFR output will duplicate the preceding frame for any missed
-    // interval instead of playing a burst of stale pictures.
-    while (_frames.isNotEmpty && !_frames.first.sendAt.isAfter(now)) {
-      frame = _frames.removeFirst();
-    }
-    late final Future<void> write;
-    write = _writeFrame(sink, frame.bytes, onError).whenComplete(() {
-      if (identical(_pendingWrite, write)) _pendingWrite = null;
-      _schedule(sink, onError);
-    });
-    _pendingWrite = write;
-    unawaited(write);
+    if (selected != null) _lastOutput = selected;
+    final output =
+        _lastOutput ??
+        (_frames.isEmpty ? null : Uint8List(_frames.first.bytes.length));
+    if (output == null) return;
+    _writeFrame(sink, output, onError);
   }
 
-  Future<void> _writeFrame(
+  void _writeFrame(
     IOSink sink,
     Uint8List bytes,
     void Function(Object error) onError,
-  ) async {
+  ) {
     try {
       sink.add(bytes);
-      await sink.flush();
     } catch (error) {
       onError(error);
     }
   }
 
-  void clear() {
+  void clear({bool preserveLastOutput = false}) {
     _timer?.cancel();
     _timer = null;
     _frames.clear();
-    _lastAcceptedAt = null;
+    _nextAcceptedAt = null;
+    if (!preserveLastOutput) _lastOutput = null;
+    _sink = null;
+    _onError = null;
+    _frameRate = null;
   }
 }
 
 class _DelayedVideoFrame {
-  const _DelayedVideoFrame(this.bytes, this.sendAt);
+  const _DelayedVideoFrame(this.bytes, this.capturedAt);
   final Uint8List bytes;
-  final DateTime sendAt;
+  final DateTime capturedAt;
 }

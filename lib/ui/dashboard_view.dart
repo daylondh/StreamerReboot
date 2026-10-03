@@ -89,7 +89,10 @@ class _DashboardView extends StatelessWidget {
                             const SizedBox(width: 16),
                             SizedBox(
                               width: 310,
-                              child: _AudioPanel(audioSources: audioSources),
+                              child: _AudioPanel(
+                                audioSources: audioSources,
+                                streamController: controller,
+                              ),
                             ),
                           ],
                         ),

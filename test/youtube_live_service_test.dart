@@ -187,6 +187,7 @@ void main() {
         title: 'Sunday Worship',
         privacy: ServicePrivacy.unlisted,
         youtubeDescription: 'Join us for Sunday worship.',
+        frameRate: StreamFrameRate.fps60,
       ),
     );
 
@@ -210,6 +211,12 @@ void main() {
       'Join us for Sunday worship.',
     );
     expect(broadcastBody['status']['privacyStatus'], 'unlisted');
+    final streamRequest = requests.firstWhere(
+      (request) =>
+          request.method == 'POST' && request.url.path.endsWith('/liveStreams'),
+    );
+    final streamBody = jsonDecode(streamRequest.body);
+    expect(streamBody['cdn']['frameRate'], '60fps');
     expect(
       broadcastBody['contentDetails']['monitorStream']['enableMonitorStream'],
       isFalse,

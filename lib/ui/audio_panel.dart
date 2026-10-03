@@ -1,12 +1,16 @@
 part of '../app.dart';
 
 class _AudioPanel extends StatelessWidget {
-  const _AudioPanel({required this.audioSources});
+  const _AudioPanel({
+    required this.audioSources,
+    required this.streamController,
+  });
   final AudioSourcesController audioSources;
+  final StreamController streamController;
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
-    listenable: audioSources,
+    listenable: Listenable.merge([audioSources, streamController]),
     builder: (context, _) => _Panel(
       title: 'Audio inputs',
       icon: Icons.graphic_eq,
@@ -21,11 +25,15 @@ class _AudioPanel extends StatelessWidget {
               )
             : const Icon(Icons.refresh),
       ),
-      child: _buildInputs(),
+      child: _buildInputs(
+        delayEnabled:
+            !streamController.session.isLive &&
+            !streamController.session.isBusy,
+      ),
     ),
   );
 
-  Widget _buildInputs() {
+  Widget _buildInputs({required bool delayEnabled}) {
     if (audioSources.isDiscovering && audioSources.sources.isEmpty) {
       return const Center(child: CircularProgressIndicator());
     }
@@ -55,6 +63,7 @@ class _AudioPanel extends StatelessWidget {
             audioSources.setGain(audioSources.sources[index], gain),
         onDelayChanged: (delay) =>
             audioSources.setDelay(audioSources.sources[index], delay),
+        delayEnabled: delayEnabled,
       ),
     );
   }
@@ -67,12 +76,14 @@ class _AudioInput extends StatelessWidget {
     required this.onEnabledChanged,
     required this.onGainChanged,
     required this.onDelayChanged,
+    required this.delayEnabled,
   });
   final AudioSource source;
   final int number;
   final ValueChanged<bool> onEnabledChanged;
   final ValueChanged<double> onGainChanged;
   final ValueChanged<int> onDelayChanged;
+  final bool delayEnabled;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -156,7 +167,11 @@ class _AudioInput extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 8),
-        _DelayControl(delayMs: source.delayMs, onChanged: onDelayChanged),
+        _DelayControl(
+          delayMs: source.delayMs,
+          onChanged: onDelayChanged,
+          enabled: delayEnabled,
+        ),
       ],
     ),
   );
@@ -168,60 +183,66 @@ class _DelayControl extends StatelessWidget {
     required this.onChanged,
     this.dark = false,
     this.maxDelayMs = 1000,
+    this.enabled = true,
   });
   final int delayMs;
   final ValueChanged<int> onChanged;
   final bool dark;
   final int maxDelayMs;
+  final bool enabled;
 
   @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-    decoration: BoxDecoration(
-      color: dark ? Colors.black87 : const Color(0x0F000000),
-      borderRadius: BorderRadius.circular(9),
-    ),
-    child: Row(
-      mainAxisSize: dark ? MainAxisSize.min : MainAxisSize.max,
-      children: [
-        Icon(Icons.sync, size: 16, color: dark ? Colors.white : null),
-        const SizedBox(width: 6),
-        Text('Delay', style: TextStyle(color: dark ? Colors.white : null)),
-        const SizedBox(width: 8),
-        if (dark)
+  Widget build(BuildContext context) {
+    final control = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: dark ? Colors.black87 : const Color(0x0F000000),
+        borderRadius: BorderRadius.circular(9),
+      ),
+      child: Row(
+        mainAxisSize: dark ? MainAxisSize.min : MainAxisSize.max,
+        children: [
+          Icon(Icons.sync, size: 16, color: dark ? Colors.white : null),
+          const SizedBox(width: 6),
+          Text('Delay', style: TextStyle(color: dark ? Colors.white : null)),
+          const SizedBox(width: 8),
+          if (dark)
+            SizedBox(
+              width: 115,
+              child: Slider(
+                value: delayMs.toDouble(),
+                min: 0,
+                max: maxDelayMs.toDouble(),
+                divisions: maxDelayMs ~/ 50,
+                label: '$delayMs ms',
+                onChanged: enabled ? (value) => onChanged(value.round()) : null,
+              ),
+            )
+          else
+            Expanded(
+              child: Slider(
+                value: delayMs.toDouble(),
+                min: 0,
+                max: maxDelayMs.toDouble(),
+                divisions: maxDelayMs ~/ 50,
+                label: '$delayMs ms',
+                onChanged: enabled ? (value) => onChanged(value.round()) : null,
+              ),
+            ),
           SizedBox(
-            width: 115,
-            child: Slider(
-              value: delayMs.toDouble(),
-              min: 0,
-              max: maxDelayMs.toDouble(),
-              divisions: maxDelayMs ~/ 50,
-              label: '$delayMs ms',
-              onChanged: (value) => onChanged(value.round()),
-            ),
-          )
-        else
-          Expanded(
-            child: Slider(
-              value: delayMs.toDouble(),
-              min: 0,
-              max: maxDelayMs.toDouble(),
-              divisions: maxDelayMs ~/ 50,
-              label: '$delayMs ms',
-              onChanged: (value) => onChanged(value.round()),
+            width: 50,
+            child: Text(
+              '$delayMs ms',
+              textAlign: TextAlign.end,
+              style: TextStyle(fontSize: 11, color: dark ? Colors.white : null),
             ),
           ),
-        SizedBox(
-          width: 50,
-          child: Text(
-            '$delayMs ms',
-            textAlign: TextAlign.end,
-            style: TextStyle(fontSize: 11, color: dark ? Colors.white : null),
-          ),
-        ),
-      ],
-    ),
-  );
+        ],
+      ),
+    );
+    if (enabled) return control;
+    return Tooltip(message: 'stop stream to adjust delays', child: control);
+  }
 }
 
 class _LevelMeter extends StatelessWidget {

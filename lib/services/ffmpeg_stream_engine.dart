@@ -80,6 +80,7 @@ class FfmpegStreamEngine extends ChangeNotifier
   DateTime? _fadeStartedAt;
   bool _fadingToSlate = false;
   Completer<void>? _startupSlateRelease;
+  Completer<void>? _startupSlateFinished;
   Duration _startupSlateDuration = const Duration(seconds: 5);
   StreamSubscription<String>? _stderrSubscription;
   int? _frameWidth;
@@ -173,6 +174,10 @@ class FfmpegStreamEngine extends ChangeNotifier
         height: session.outputResolution.height ?? frame.height,
       );
       logMessage('[FFmpeg] Selected video encoder: $videoEncoder');
+      logMessage(
+        '[FFmpeg] Camera "$cameraName" video delay: '
+        '${cameraDelayForName(cameraName)} ms',
+      );
       final arguments = buildArguments(
         audioPort: _audioServer!.port,
         width: frame.width,
@@ -192,7 +197,7 @@ class FfmpegStreamEngine extends ChangeNotifier
       // process's native stdin pipe instead of routing it through loopback TCP.
       _videoSink = process.stdin;
       _consumeSinkErrors(_videoSink!, 'video');
-      _primeVideoInput(frame);
+      _writeVideoFrame(frame);
       _stderrSubscription = process.stderr
           .transform(utf8.decoder)
           .transform(const LineSplitter())
@@ -210,6 +215,7 @@ class FfmpegStreamEngine extends ChangeNotifier
       final startupSlate = _startupSlate;
       if (startupSlate != null) {
         _startupSlateRelease = Completer<void>();
+        _startupSlateFinished = Completer<void>();
         _startupSlateDuration = Duration(
           seconds: session.startupSplashDurationSeconds,
         );
@@ -243,8 +249,7 @@ class FfmpegStreamEngine extends ChangeNotifier
     await previous.stopImageStream();
     _camera = next;
     _activeCameraName = cameraName;
-    _videoQueue.clear();
-    _primeVideoPlaceholder(Uint8List(_frameWidth! * _frameHeight! * 4));
+    _videoQueue.clear(preserveLastOutput: true);
     try {
       var describedFormat = false;
       await next.startImageStream((frame) {
@@ -261,8 +266,7 @@ class FfmpegStreamEngine extends ChangeNotifier
     } catch (_) {
       _camera = previous;
       _activeCameraName = previousName;
-      _videoQueue.clear();
-      _primeVideoPlaceholder(Uint8List(_frameWidth! * _frameHeight! * 4));
+      _videoQueue.clear(preserveLastOutput: true);
       await previous.startImageStream(_writeVideoFrame);
       rethrow;
     }

@@ -290,7 +290,11 @@ class YouTubeLiveService extends ChangeNotifier {
           cdn: CdnSettings(
             ingestionType: 'rtmp',
             resolution: '720p',
-            frameRate: '30fps',
+            // YouTube groups 24/30 fps as its standard frame-rate tier and
+            // requires the high-frame-rate tier for a 60 fps ingest.
+            frameRate: session.frameRate == StreamFrameRate.fps60
+                ? '60fps'
+                : '30fps',
           ),
         ),
         ['snippet', 'cdn', 'status'],

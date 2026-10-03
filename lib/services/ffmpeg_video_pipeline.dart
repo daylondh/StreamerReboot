@@ -1,40 +1,6 @@
 part of 'ffmpeg_stream_engine.dart';
 
 extension _FfmpegVideoPipeline on FfmpegStreamEngine {
-  Duration get _activeVideoDelay {
-    final cameraName = _activeCameraName;
-    return Duration(
-      milliseconds: cameraName == null ? 0 : cameraDelayForName(cameraName),
-    );
-  }
-
-  void _primeVideoPlaceholder(Uint8List bytes) {
-    final sink = _videoSink;
-    final delay = _activeVideoDelay;
-    if (sink == null || delay <= Duration.zero) return;
-    _videoQueue.prime(
-      bytes,
-      delay,
-      sink,
-      (error) => _recordTransportError('video', error),
-      frameRate: _frameRate,
-    );
-  }
-
-  void _primeVideoInput(CameraImage firstFrame) {
-    if (_activeVideoDelay > Duration.zero) {
-      // Raw inputs receive independent timestamps beginning at zero. Without
-      // video pre-roll, FFmpeg labels the first delayed camera frame as video
-      // time zero and aligns it with audio time zero, effectively delaying
-      // both. Black frames advance only the video timeline while real camera
-      // frames remain buffered for the requested offset.
-      _primeVideoPlaceholder(
-        Uint8List(firstFrame.width * firstFrame.height * 4),
-      );
-    }
-    _writeVideoFrame(firstFrame);
-  }
-
   void _writeVideoFrame(CameraImage frame) {
     final sink = _videoSink;
     if (sink == null || frame.planes.isEmpty || _slateActive) return;
@@ -45,6 +11,11 @@ extension _FfmpegVideoPipeline on FfmpegStreamEngine {
       return;
     }
     final plane = frame.planes.first;
+    final videoDelay = Duration(
+      milliseconds: _activeCameraName == null
+          ? 0
+          : cameraDelayForName(_activeCameraName!),
+    );
     final rowBytes = frame.width * 4;
     try {
       final sourceFormat = _cameraPixelFormat(frame);
@@ -53,11 +24,13 @@ extension _FfmpegVideoPipeline on FfmpegStreamEngine {
           frame.height == targetHeight &&
           sourceFormat == targetFormat &&
           plane.bytesPerRow == rowBytes) {
-        // Retaining the plane's Uint8List keeps its Dart-managed byte buffer
-        // reachable until delivery. Avoid copying an entire BGRA frame here:
-        // at 1080p that was an additional ~249 MB/s allocation/copy at 30 fps
-        // before FFmpeg did any work.
-        bytes = plane.bytes;
+        // Some camera backends reuse the same native frame buffer on later
+        // callbacks. A delayed frame must own a snapshot or every queued entry
+        // can appear to contain the newest image, making the delay ineffective.
+        // Keep the zero-delay path allocation-free.
+        bytes = videoDelay > Duration.zero
+            ? Uint8List.fromList(plane.bytes)
+            : plane.bytes;
       } else {
         bytes = _normalizeFrame(
           frame,
@@ -69,7 +42,7 @@ extension _FfmpegVideoPipeline on FfmpegStreamEngine {
       }
       _videoQueue.add(
         _applyFade(bytes),
-        _activeVideoDelay,
+        videoDelay,
         sink,
         (error) => _recordTransportError('video', error),
         frameRate: _frameRate,

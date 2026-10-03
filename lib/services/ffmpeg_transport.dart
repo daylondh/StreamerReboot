@@ -70,6 +70,11 @@ extension _FfmpegTransport on FfmpegStreamEngine {
       startupRelease.complete();
     }
     _startupSlateRelease = null;
+    final startupFinished = _startupSlateFinished;
+    if (startupFinished != null && !startupFinished.isCompleted) {
+      startupFinished.complete();
+    }
+    _startupSlateFinished = null;
     final camera = _camera;
     _camera = null;
     _activeCameraName = null;

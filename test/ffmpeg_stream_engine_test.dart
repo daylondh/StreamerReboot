@@ -45,9 +45,9 @@ void main() {
         );
       });
 
-      await Future<void>.delayed(const Duration(milliseconds: 80));
+      await Future<void>.delayed(const Duration(milliseconds: 160));
 
-      expect(received, isNotEmpty);
+      expect(received.where((bytes) => bytes.first > 0), isNotEmpty);
       pump.cancel();
       queue.clear();
       await sink.close();
@@ -55,35 +55,138 @@ void main() {
     },
   );
 
-  test('video delay primes the video timeline before camera frames', () async {
+  test(
+    'video queue preserves nominal frame rate despite clock jitter',
+    () async {
+      var now = DateTime.now();
+      final controller = StreamController<List<int>>();
+      final subscription = controller.stream.listen((_) {});
+      final sink = IOSink(controller.sink);
+      final queue = DelayedVideoQueue(now: () => now);
+
+      for (var frame = 0; frame < 10; frame++) {
+        queue.add(
+          Uint8List.fromList([frame]),
+          const Duration(seconds: 1),
+          sink,
+          (error) => fail('Unexpected delayed video write error: $error'),
+          frameRate: 30,
+        );
+        // Real 30 fps capture clocks commonly round to 33 ms rather than the
+        // ideal repeating 33.333 ms interval.
+        now = now.add(const Duration(milliseconds: 33));
+      }
+
+      expect(queue.bufferedFrameCount, 10);
+      queue.clear();
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      await sink.close();
+      await subscription.cancel();
+    },
+  );
+
+  for (final frameRate in [24, 30, 60]) {
+    test('video queue holds frames at $frameRate fps for the delay', () async {
+      final controller = StreamController<List<int>>();
+      final firstCameraFrame = Completer<Duration>();
+      final stopwatch = Stopwatch()..start();
+      final subscription = controller.stream.listen((bytes) {
+        if (bytes.first == 7 && !firstCameraFrame.isCompleted) {
+          firstCameraFrame.complete(stopwatch.elapsed);
+        }
+      });
+      final sink = IOSink(controller.sink);
+      final queue = DelayedVideoQueue();
+
+      queue.add(
+        Uint8List.fromList([7]),
+        const Duration(milliseconds: 150),
+        sink,
+        (error) => fail('Unexpected delayed video write error: $error'),
+        frameRate: frameRate,
+      );
+
+      final deliveredAt = await firstCameraFrame.future.timeout(
+        const Duration(seconds: 1),
+      );
+      expect(
+        deliveredAt,
+        greaterThanOrEqualTo(const Duration(milliseconds: 120)),
+      );
+      queue.clear();
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      await sink.close();
+      await subscription.cancel();
+    });
+  }
+
+  test('video queue honors the full 1500 ms delay at 60 fps', () async {
+    final controller = StreamController<List<int>>();
+    final firstCameraFrame = Completer<Duration>();
+    final stopwatch = Stopwatch()..start();
+    final subscription = controller.stream.listen((bytes) {
+      if (bytes.first == 1 && !firstCameraFrame.isCompleted) {
+        firstCameraFrame.complete(stopwatch.elapsed);
+      }
+    });
+    final sink = IOSink(controller.sink);
+    final queue = DelayedVideoQueue();
+    final pump = Timer.periodic(const Duration(milliseconds: 16), (_) {
+      queue.add(
+        Uint8List.fromList([1]),
+        const Duration(milliseconds: 1500),
+        sink,
+        (error) => fail('Unexpected delayed video write error: $error'),
+        frameRate: 60,
+      );
+    });
+
+    final deliveredAt = await firstCameraFrame.future.timeout(
+      const Duration(seconds: 3),
+    );
+    expect(
+      deliveredAt,
+      greaterThanOrEqualTo(const Duration(milliseconds: 1400)),
+    );
+    pump.cancel();
+    queue.clear();
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    await sink.close();
+    await subscription.cancel();
+  });
+
+  test('startup slate remains visible while video delay primes', () async {
     final received = <List<int>>[];
     final controller = StreamController<List<int>>();
     final subscription = controller.stream.listen(received.add);
     final sink = IOSink(controller.sink);
     final queue = DelayedVideoQueue();
 
-    queue.prime(
-      Uint8List.fromList([0]),
-      const Duration(milliseconds: 90),
-      sink,
-      (error) => fail('Unexpected video pre-roll error: $error'),
-      frameRate: 30,
-    );
     queue.add(
-      Uint8List.fromList([1]),
-      const Duration(milliseconds: 90),
+      Uint8List.fromList([9]),
+      Duration.zero,
       sink,
-      (error) => fail('Unexpected delayed video write error: $error'),
+      (error) => fail('Unexpected slate write error: $error'),
+      frameRate: 30,
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 45));
+    queue.clear(preserveLastOutput: true);
+    received.clear();
+    queue.add(
+      Uint8List.fromList([7]),
+      const Duration(milliseconds: 120),
+      sink,
+      (error) => fail('Unexpected camera write error: $error'),
       frameRate: 30,
     );
 
-    await Future<void>.delayed(const Duration(milliseconds: 50));
+    await Future<void>.delayed(const Duration(milliseconds: 80));
     expect(received, isNotEmpty);
-    expect(received, everyElement([0]));
-
-    await Future<void>.delayed(const Duration(milliseconds: 70));
-    expect(received, contains(equals([1])));
+    expect(received, everyElement(equals([9])));
+    await Future<void>.delayed(const Duration(milliseconds: 90));
+    expect(received, contains(equals([7])));
     queue.clear();
+    await Future<void>.delayed(const Duration(milliseconds: 10));
     await sink.close();
     await subscription.cancel();
   });

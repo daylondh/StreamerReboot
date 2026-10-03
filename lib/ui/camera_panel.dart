@@ -102,6 +102,7 @@ class _CameraPanel extends StatelessWidget {
                   streamController.session.cameraName ==
                   cameraSources.sources[index].description.name,
               isSwitching: streamController.isSwitchingCamera,
+              delayEnabled: !session.isLive && !session.isBusy,
               onSelect: () => streamController.selectCamera(
                 cameraSources.sources[index].description.name,
               ),

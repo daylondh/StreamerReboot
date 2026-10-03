@@ -2,19 +2,30 @@ part of 'ffmpeg_stream_engine.dart';
 
 extension _FfmpegSlatePipeline on FfmpegStreamEngine {
   Future<void> _playStartupSlate(Uint8List bytes, Duration duration) async {
-    await _playSlateUntil(bytes, _startupSlateRelease!.future);
-    await _playSlate(bytes, duration, keepActive: true);
-    await _crossfade(bytes, toSlate: false);
+    final release = _startupSlateRelease;
+    final finished = _startupSlateFinished;
+    if (release == null || finished == null) return;
+    try {
+      // The configured duration is the minimum total time the opening slate
+      // appears in the encoded program. Waiting for YouTube and then starting
+      // this timer made a 5-second slate commonly last about 10 seconds.
+      await _playSlateUntil(
+        bytes,
+        Future.wait([release.future, Future<void>.delayed(duration)]),
+      );
+      await _crossfade(bytes, toSlate: false);
+    } finally {
+      if (!finished.isCompleted) finished.complete();
+    }
   }
 
   Future<void> _finishStartupSlate() async {
     final release = _startupSlateRelease;
     if (release == null) return;
     if (!release.isCompleted) release.complete();
-    // Keep the splash visible for its full configured program duration after
-    // YouTube has made the broadcast visible to viewers.
-    await Future<void>.delayed(_startupSlateDuration + _fadeDuration);
+    await _startupSlateFinished?.future;
     _startupSlateRelease = null;
+    _startupSlateFinished = null;
   }
 
   Future<void> _playSlateUntil(Uint8List bytes, Future<void> until) async {
@@ -75,8 +86,7 @@ extension _FfmpegSlatePipeline on FfmpegStreamEngine {
   Future<void> _crossfade(Uint8List slate, {required bool toSlate}) async {
     _slateTimer?.cancel();
     _slateTimer = null;
-    _videoQueue.clear();
-    if (!toSlate) _primeVideoPlaceholder(slate);
+    _videoQueue.clear(preserveLastOutput: !toSlate);
     _fadeSlate = slate;
     _fadeStartedAt = DateTime.now();
     _fadingToSlate = toSlate;
