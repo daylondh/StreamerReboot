@@ -70,6 +70,8 @@ class FfmpegStreamEngine extends ChangeNotifier
   Socket? _audioSocket;
   ServerSocket? _audioServer;
   Timer? _audioTimer;
+  Stopwatch? _audioClock;
+  int _audioChunksWritten = 0;
   Timer? _slateTimer;
   int _slateGeneration = 0;
   final DelayedVideoQueue _videoQueue = DelayedVideoQueue();

@@ -57,7 +57,19 @@ class PcmQueue {
       if (_length < delayBytes + count) return Uint8List(count);
       _bufferedDelayBytes = delayBytes;
     }
-    return take(count);
+    // Capture hardware and Dart's 20 ms mixer timer do not share a clock.
+    // Even a tiny rate mismatch otherwise accumulates surplus PCM forever,
+    // making the effective audio delay grow throughout the stream. Keep
+    // exactly the requested backlog and discard the oldest surplus samples.
+    _discard(_length - delayBytes - count);
+    final availableWithoutConsumingDelay = math.max(_length - delayBytes, 0);
+    final available = math.min(count, availableWithoutConsumingDelay);
+    if (available == count) return take(count);
+    final output = Uint8List(count);
+    if (available > 0) {
+      output.setRange(0, available, take(available));
+    }
+    return output;
   }
 
   void _discard(int count) {
@@ -79,7 +91,14 @@ class PcmQueue {
 
 @visibleForTesting
 class DelayedVideoQueue {
-  DelayedVideoQueue({DateTime Function()? now}) : _now = now ?? DateTime.now;
+  DelayedVideoQueue({DateTime Function()? now})
+    : _now = now ?? _createMonotonicClock();
+
+  static DateTime Function() _createMonotonicClock() {
+    final origin = DateTime.now();
+    final stopwatch = Stopwatch()..start();
+    return () => origin.add(stopwatch.elapsed);
+  }
 
   final DateTime Function() _now;
   final Queue<_DelayedVideoFrame> _frames = Queue<_DelayedVideoFrame>();
@@ -90,9 +109,17 @@ class DelayedVideoQueue {
   IOSink? _sink;
   void Function(Object error)? _onError;
   int? _frameRate;
+  DateTime? _clockStartedAt;
+  int _framesWritten = 0;
 
   @visibleForTesting
   int get bufferedFrameCount => _frames.length;
+
+  @visibleForTesting
+  int get framesWritten => _framesWritten;
+
+  @visibleForTesting
+  void pumpClock() => _pumpClock();
 
   void add(
     Uint8List bytes,
@@ -149,8 +176,29 @@ class DelayedVideoQueue {
 
   void _startClock(Duration frameInterval) {
     if (_timer != null) return;
+    _clockStartedAt = _now();
+    _framesWritten = 0;
     _emitFrame();
-    _timer = Timer.periodic(frameInterval, (_) => _emitFrame());
+    _framesWritten = 1;
+    _timer = Timer.periodic(frameInterval, (_) => _pumpClock());
+  }
+
+  void _pumpClock() {
+    final startedAt = _clockStartedAt;
+    final frameRate = _frameRate;
+    if (startedAt == null || frameRate == null) return;
+    final elapsed = _now().difference(startedAt).inMicroseconds;
+    final targetFrames =
+        1 +
+        (math.max(elapsed, 0) * frameRate ~/ Duration.microsecondsPerSecond);
+    final maxCatchUpFrames = math.max(1, (frameRate / 5).ceil());
+    if (targetFrames - _framesWritten > maxCatchUpFrames) {
+      _framesWritten = targetFrames - maxCatchUpFrames;
+    }
+    while (_framesWritten < targetFrames) {
+      _emitFrame();
+      _framesWritten++;
+    }
   }
 
   void _emitFrame() {
@@ -192,6 +240,8 @@ class DelayedVideoQueue {
     _sink = null;
     _onError = null;
     _frameRate = null;
+    _clockStartedAt = null;
+    _framesWritten = 0;
   }
 }
 

@@ -8,38 +8,54 @@ extension _FfmpegAudioMixer on FfmpegStreamEngine {
       _audioSubscriptions.add(source.mixedAudio.stream.listen(queue.add));
     }
     // 20 ms of 48 kHz mono signed 16-bit PCM.
-    const byteCount = 1920;
+    _audioClock = Stopwatch()..start();
+    _audioChunksWritten = 0;
     _audioTimer = Timer.periodic(const Duration(milliseconds: 20), (_) {
-      final socket = _audioSocket;
-      if (socket == null) return;
-      final enabled = audioSources.sources
-          .where((source) => source.enabled)
-          .toList();
-      if (enabled.isEmpty) {
-        _writeAudio(socket, Uint8List(byteCount));
-        return;
+      final elapsed = _audioClock?.elapsedMicroseconds ?? 0;
+      final targetChunks = elapsed ~/ 20000;
+      // Recover ordinary event-loop stalls so the generated PCM sample clock
+      // cannot fall progressively behind video. Cap catch-up after a long OS
+      // suspension rather than flooding the transport with seconds of audio.
+      if (targetChunks - _audioChunksWritten > 10) {
+        _audioChunksWritten = targetChunks - 10;
       }
-      final chunks = [
-        for (final source in enabled)
-          _audioQueues[source]!.takeDelayed(
-            byteCount,
-            source.delayMs * 96, // 48 kHz, mono, 16-bit = 96 bytes/ms.
-          ),
-      ];
-      final chunkData = [
-        for (final chunk in chunks) ByteData.sublistView(chunk),
-      ];
-      final output = Uint8List(byteCount);
-      final outputData = ByteData.sublistView(output);
-      for (var offset = 0; offset < byteCount; offset += 2) {
-        var mixed = 0;
-        for (final data in chunkData) {
-          mixed += data.getInt16(offset, Endian.little);
-        }
-        outputData.setInt16(offset, mixed.clamp(-32768, 32767), Endian.little);
+      while (_audioChunksWritten < targetChunks) {
+        _mixNextAudioChunk();
+        _audioChunksWritten++;
       }
-      _writeAudio(socket, output);
     });
+  }
+
+  void _mixNextAudioChunk() {
+    final socket = _audioSocket;
+    if (socket == null) return;
+    // 20 ms of 48 kHz mono signed 16-bit PCM.
+    const byteCount = 1920;
+    final enabled = audioSources.sources
+        .where((source) => source.enabled)
+        .toList();
+    if (enabled.isEmpty) {
+      _writeAudio(socket, Uint8List(byteCount));
+      return;
+    }
+    final chunks = [
+      for (final source in enabled)
+        _audioQueues[source]!.takeDelayed(
+          byteCount,
+          source.delayMs * 96, // 48 kHz, mono, 16-bit = 96 bytes/ms.
+        ),
+    ];
+    final chunkData = [for (final chunk in chunks) ByteData.sublistView(chunk)];
+    final output = Uint8List(byteCount);
+    final outputData = ByteData.sublistView(output);
+    for (var offset = 0; offset < byteCount; offset += 2) {
+      var mixed = 0;
+      for (final data in chunkData) {
+        mixed += data.getInt16(offset, Endian.little);
+      }
+      outputData.setInt16(offset, mixed.clamp(-32768, 32767), Endian.little);
+    }
+    _writeAudio(socket, output);
   }
 
   void _writeAudio(Socket socket, Uint8List bytes) {

@@ -57,6 +57,9 @@ extension _FfmpegTransport on FfmpegStreamEngine {
     _fadeStartedAt = null;
     _audioTimer?.cancel();
     _audioTimer = null;
+    _audioClock?.stop();
+    _audioClock = null;
+    _audioChunksWritten = 0;
     for (final subscription in _audioSubscriptions) {
       await _ignoreCleanup(subscription.cancel(), 'audio subscription');
     }

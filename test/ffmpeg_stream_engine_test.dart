@@ -27,6 +27,40 @@ void main() {
     expect(queue.takeDelayed(2, 4), [1, 2]);
   });
 
+  test('PCM queue prevents audio delay from growing with clock drift', () {
+    final queue = PcmQueue(maxBufferBytes: 64);
+    queue.add(Uint8List.fromList([1, 2, 3, 4, 5, 6]));
+
+    expect(queue.takeDelayed(2, 4), [1, 2]);
+    expect(queue.length, 4);
+
+    // Capture supplies four bytes while the mixer consumes two. The oldest
+    // two surplus bytes must be dropped so the requested four-byte delay is
+    // preserved instead of silently growing to six bytes.
+    queue.add(Uint8List.fromList([7, 8, 9, 10]));
+    expect(queue.takeDelayed(2, 4), [5, 6]);
+    expect(queue.length, 4);
+
+    for (var tick = 0; tick < 1000; tick++) {
+      queue.add(Uint8List.fromList([11, 12, 13]));
+      queue.takeDelayed(2, 4);
+      expect(queue.length, lessThanOrEqualTo(4));
+    }
+  });
+
+  test('PCM queue preserves requested delay through an underrun', () {
+    final queue = PcmQueue(maxBufferBytes: 32);
+    queue.add(Uint8List.fromList([1, 2, 3, 4, 5, 6]));
+
+    expect(queue.takeDelayed(2, 4), [1, 2]);
+    expect(queue.takeDelayed(2, 4), [0, 0]);
+    expect(queue.length, 4);
+
+    queue.add(Uint8List.fromList([7]));
+    expect(queue.takeDelayed(2, 4), [3, 0]);
+    expect(queue.length, 4);
+  });
+
   test(
     'video delay delivers frames when capture exceeds output rate',
     () async {
@@ -84,6 +118,31 @@ void main() {
       await subscription.cancel();
     },
   );
+
+  test('video clock catches up after an event-loop stall', () async {
+    var now = DateTime.now();
+    final controller = StreamController<List<int>>();
+    final subscription = controller.stream.listen((_) {});
+    final sink = IOSink(controller.sink);
+    final queue = DelayedVideoQueue(now: () => now);
+    queue.add(
+      Uint8List.fromList([1]),
+      Duration.zero,
+      sink,
+      (error) => fail('Unexpected video write error: $error'),
+      frameRate: 24,
+    );
+    expect(queue.framesWritten, 1);
+
+    now = now.add(const Duration(milliseconds: 250));
+    queue.pumpClock();
+
+    expect(queue.framesWritten, 7);
+    queue.clear();
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    await sink.close();
+    await subscription.cancel();
+  });
 
   for (final frameRate in [24, 30, 60]) {
     test('video queue holds frames at $frameRate fps for the delay', () async {
