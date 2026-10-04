@@ -27,24 +27,23 @@ void main() {
     expect(queue.takeDelayed(2, 4), [1, 2]);
   });
 
-  test('PCM queue prevents audio delay from growing with clock drift', () {
+  test('PCM queue bounds clock drift without trimming callback bursts', () {
     final queue = PcmQueue(maxBufferBytes: 64);
     queue.add(Uint8List.fromList([1, 2, 3, 4, 5, 6]));
 
     expect(queue.takeDelayed(2, 4), [1, 2]);
     expect(queue.length, 4);
 
-    // Capture supplies four bytes while the mixer consumes two. The oldest
-    // two surplus bytes must be dropped so the requested four-byte delay is
-    // preserved instead of silently growing to six bytes.
+    // Capture supplies two mixer blocks at once. Both must survive so the
+    // second block is available on the next tick instead of becoming silence.
     queue.add(Uint8List.fromList([7, 8, 9, 10]));
-    expect(queue.takeDelayed(2, 4), [5, 6]);
-    expect(queue.length, 4);
+    expect(queue.takeDelayed(2, 4), [3, 4]);
+    expect(queue.length, 6);
 
     for (var tick = 0; tick < 1000; tick++) {
-      queue.add(Uint8List.fromList([11, 12, 13]));
+      queue.add(Uint8List.fromList([11, 12, 13, 14]));
       queue.takeDelayed(2, 4);
-      expect(queue.length, lessThanOrEqualTo(4));
+      expect(queue.length, lessThanOrEqualTo(10));
     }
   });
 

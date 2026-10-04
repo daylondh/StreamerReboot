@@ -57,11 +57,14 @@ class PcmQueue {
       if (_length < delayBytes + count) return Uint8List(count);
       _bufferedDelayBytes = delayBytes;
     }
-    // Capture hardware and Dart's 20 ms mixer timer do not share a clock.
-    // Even a tiny rate mismatch otherwise accumulates surplus PCM forever,
-    // making the effective audio delay grow throughout the stream. Keep
-    // exactly the requested backlog and discard the oldest surplus samples.
-    _discard(_length - delayBytes - count);
+    // Recorder callbacks commonly batch several 20 ms blocks. Trimming every
+    // instantaneous surplus discards the next tick's valid audio and then
+    // inserts silence, which sounds like low-frequency buffeting. Allow three
+    // mixer blocks of callback jitter, then correct genuine clock drift one
+    // 16-bit PCM sample per tick so the adjustment remains inaudible.
+    final jitterHeadroomBytes = count * 3;
+    final excess = _length - delayBytes - count - jitterHeadroomBytes;
+    if (excess >= 2) _discard(2);
     final availableWithoutConsumingDelay = math.max(_length - delayBytes, 0);
     final available = math.min(count, availableWithoutConsumingDelay);
     if (available == count) return take(count);
