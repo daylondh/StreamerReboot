@@ -21,10 +21,6 @@ jobs:
     name: Build and package Windows x64
     runs-on: windows-latest
     timeout-minutes: 45
-    env:
-      SCCACHE_GHA_ENABLED: "true"
-      CMAKE_C_COMPILER_LAUNCHER: sccache
-      CMAKE_CXX_COMPILER_LAUNCHER: sccache
 
     steps:
       - name: Check out source
@@ -34,6 +30,7 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: 3.44.1
           cache: true
           pub-cache: true
 
@@ -43,34 +40,79 @@ jobs:
           flutter config --enable-windows-desktop
           flutter pub get
 
-      - name: Set up cached Windows compiler
-        uses: mozilla-actions/sccache-action@v0.0.11
-
-      - name: Analyze and test
-        if: ${{ inputs.run_checks }}
-        shell: pwsh
-        run: |
-          flutter analyze
-          flutter test
-
-      - name: Set up cached FFmpeg
-        id: setup-ffmpeg
-        uses: FedericoCarboni/setup-ffmpeg@v3
+      - name: Restore incremental Windows build
+        uses: actions/cache@v4
         with:
-          ffmpeg-version: release
-          architecture: x64
-          linking-type: static
-          github-token: ${{ github.token }}
+          path: |
+            build/windows
+            .dart_tool/flutter_build
+          key: windows-build-v1-${{ runner.os }}-flutter-3.44.1-${{ hashFiles('pubspec.lock', 'windows/**') }}-${{ github.sha }}
+          restore-keys: |
+            windows-build-v1-${{ runner.os }}-flutter-3.44.1-${{ hashFiles('pubspec.lock', 'windows/**') }}-
 
-      - name: Build Windows release
+      - name: Build Windows release and prepare FFmpeg
         shell: pwsh
-        run: flutter build windows --release --no-pub
+        env:
+          FFMPEG_URL: https://github.com/GyanD/codexffmpeg/releases/download/9.0.2/ffmpeg-9.0.2-essentials_build.7z
+          FFMPEG_SHA256: 4705843ccaaf54257c16ad90f3e952ece33c17df964ecf7bfdbb0f49c7171077
+        run: |
+          $ffmpegRoot = Join-Path $env:RUNNER_TEMP "ffmpeg-9.0.2"
+          $ffmpegPathFile = Join-Path $env:RUNNER_TEMP "ffmpeg-path.txt"
+
+          # FFmpeg is only needed during packaging, so download and extract it
+          # while checks and the Flutter release build use the runner CPU.
+          $ffmpegJob = Start-Job -ArgumentList $env:FFMPEG_URL, $env:FFMPEG_SHA256, $ffmpegRoot, $ffmpegPathFile -ScriptBlock {
+            param($url, $expectedHash, $destination, $pathFile)
+            $ErrorActionPreference = "Stop"
+            $archive = Join-Path $env:TEMP "ffmpeg-9.0.2-essentials_build.7z"
+            $archiveName = Split-Path -Leaf $archive
+            $archiveDirectory = Split-Path -Parent $archive
+
+            & aria2c.exe --allow-overwrite=true --auto-file-renaming=false --file-allocation=none --max-connection-per-server=8 --split=8 --out=$archiveName --dir=$archiveDirectory $url
+            if ($LASTEXITCODE -ne 0) { throw "FFmpeg download failed with exit code $LASTEXITCODE." }
+
+            $actualHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
+            if ($actualHash -ne $expectedHash) {
+              throw "FFmpeg checksum mismatch. Expected $expectedHash; received $actualHash."
+            }
+
+            New-Item -ItemType Directory -Force -Path $destination | Out-Null
+            & 7z.exe x $archive "-o$destination" -y
+            if ($LASTEXITCODE -ne 0) { throw "FFmpeg extraction failed with exit code $LASTEXITCODE." }
+
+            $ffmpegPath = Get-ChildItem -LiteralPath $destination -Filter "ffmpeg.exe" -File -Recurse |
+              Select-Object -First 1 -ExpandProperty FullName
+            if (-not $ffmpegPath) { throw "The FFmpeg archive did not contain ffmpeg.exe." }
+            Set-Content -LiteralPath $pathFile -Value $ffmpegPath -Encoding UTF8
+          }
+
+          try {
+            if ('${{ inputs.run_checks }}' -eq 'true') {
+              flutter analyze
+              if ($LASTEXITCODE -ne 0) { throw "flutter analyze failed with exit code $LASTEXITCODE." }
+              flutter test
+              if ($LASTEXITCODE -ne 0) { throw "flutter test failed with exit code $LASTEXITCODE." }
+            }
+
+            flutter build windows --release --no-pub
+            if ($LASTEXITCODE -ne 0) { throw "flutter build windows failed with exit code $LASTEXITCODE." }
+
+            Wait-Job -Job $ffmpegJob | Out-Null
+            Receive-Job -Job $ffmpegJob -ErrorAction Stop
+            if ($ffmpegJob.State -ne 'Completed') { throw "FFmpeg preparation ended in state $($ffmpegJob.State)." }
+          } finally {
+            Remove-Job -Job $ffmpegJob -Force -ErrorAction SilentlyContinue
+          }
+
+          if (-not (Test-Path -LiteralPath $ffmpegPathFile -PathType Leaf)) {
+            throw "FFmpeg preparation did not produce a path file."
+          }
+          $ffmpegPath = Get-Content -LiteralPath $ffmpegPathFile -Raw
+          "FFMPEG_PATH=$($ffmpegPath.Trim())" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Assemble transferable package
         shell: pwsh
-        run: |
-          $ffmpegPath = Join-Path '${{ steps.setup-ffmpeg.outputs.ffmpeg-path }}' 'ffmpeg.exe'
-          .\scripts\Package-Windows.ps1 -FfmpegPath $ffmpegPath -SkipBuild -NoZip
+        run: .\scripts\Package-Windows.ps1 -FfmpegPath $env:FFMPEG_PATH -SkipBuild -NoZip
 
       - name: Upload Windows package
         uses: actions/upload-artifact@v4
