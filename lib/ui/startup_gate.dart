@@ -13,6 +13,7 @@ class _StartupGateState extends State<_StartupGate> {
   AudioSourcesController? _audioSources;
   FfmpegStreamEngine? _recordingEngine;
   YouTubeLiveService? _youtube;
+  AppUpdateService? _updateService;
 
   @override
   void initState() {
@@ -49,6 +50,15 @@ class _StartupGateState extends State<_StartupGate> {
       ),
       settingsStore: SharedPreferencesStreamSettingsStore(),
     );
+    final packageInfo = await PackageInfo.fromPlatform();
+    final supportDirectory = await getApplicationSupportDirectory();
+    final updateService = AppUpdateService(
+      currentVersion: packageInfo.version,
+      stateDirectory: Directory(
+        '${supportDirectory.path}${Platform.pathSeparator}updates',
+      ),
+      isWindows: Platform.isWindows,
+    );
     await Future.wait([
       controller.initialize(),
       recordingEngine.checkFfmpegAvailability(),
@@ -61,6 +71,7 @@ class _StartupGateState extends State<_StartupGate> {
       audioSources.dispose();
       recordingEngine.dispose();
       youtube.dispose();
+      updateService.dispose();
       return;
     }
     setState(() {
@@ -69,7 +80,9 @@ class _StartupGateState extends State<_StartupGate> {
       _audioSources = audioSources;
       _recordingEngine = recordingEngine;
       _youtube = youtube;
+      _updateService = updateService;
     });
+    unawaited(updateService.initialize());
   }
 
   @override
@@ -81,6 +94,7 @@ class _StartupGateState extends State<_StartupGate> {
         audioSources: _audioSources!,
         recordingEngine: _recordingEngine!,
         youtube: _youtube!,
+        updateService: _updateService,
       );
     }
     return const _LoadingSplash();

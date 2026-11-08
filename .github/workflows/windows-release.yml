@@ -1,6 +1,9 @@
 name: Build Windows release
 
 on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
   workflow_dispatch:
     inputs:
       run_checks:
@@ -14,7 +17,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-windows:
@@ -24,7 +27,7 @@ jobs:
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up cached Flutter SDK
         uses: subosito/flutter-action@v2
@@ -40,15 +43,26 @@ jobs:
           flutter config --enable-windows-desktop
           flutter pub get
 
-      - name: Restore incremental Windows build
-        uses: actions/cache@v4
+      - name: Validate release tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $declaredVersion = ((Select-String -Path pubspec.yaml -Pattern '^version:\s*([^+\s]+)').Matches.Groups[1].Value)
+          $tagVersion = '${{ github.ref_name }}'.TrimStart('v')
+          if ($declaredVersion -ne $tagVersion) {
+            throw "Tag v$tagVersion does not match pubspec version $declaredVersion."
+          }
+
+      # CMake's generated Visual Studio tree embeds runner-specific state and
+      # cannot safely be restored on a different hosted Windows VM. Cache only
+      # Flutter's rebuildable intermediates and regenerate CMake every run.
+      - name: Restore Flutter build intermediates
+        uses: actions/cache@v5
         with:
-          path: |
-            build/windows
-            .dart_tool/flutter_build
-          key: windows-build-v1-${{ runner.os }}-flutter-3.44.1-${{ hashFiles('pubspec.lock', 'windows/**') }}-${{ github.sha }}
+          path: .dart_tool/flutter_build
+          key: windows-flutter-build-v2-${{ runner.os }}-flutter-3.44.1-${{ hashFiles('pubspec.lock') }}-${{ github.sha }}
           restore-keys: |
-            windows-build-v1-${{ runner.os }}-flutter-3.44.1-${{ hashFiles('pubspec.lock', 'windows/**') }}-
+            windows-flutter-build-v2-${{ runner.os }}-flutter-3.44.1-${{ hashFiles('pubspec.lock') }}-
 
       - name: Build Windows release and prepare FFmpeg
         shell: pwsh
@@ -112,13 +126,25 @@ jobs:
 
       - name: Assemble transferable package
         shell: pwsh
-        run: .\scripts\Package-Windows.ps1 -FfmpegPath $env:FFMPEG_PATH -SkipBuild -NoZip
+        run: .\scripts\Package-Windows.ps1 -FfmpegPath $env:FFMPEG_PATH -SkipBuild
 
       - name: Upload Windows package
         uses: actions/upload-artifact@v4
         with:
           name: ChurchStreamer-Windows-x64
-          path: dist/ChurchStreamer-Windows-x64
+          path: dist/ChurchStreamer-Windows-x64.zip
           if-no-files-found: error
           retention-days: 14
           compression-level: 1
+
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create '${{ github.ref_name }}' `
+            'dist/ChurchStreamer-Windows-x64.zip#Church Streamer for Windows x64' `
+            --verify-tag `
+            --generate-notes `
+            --title 'Church Streamer ${{ github.ref_name }}'

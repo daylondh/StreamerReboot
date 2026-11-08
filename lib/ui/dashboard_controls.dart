@@ -77,12 +77,14 @@ class _SettingsPanel extends StatelessWidget {
     required this.startupTextController,
     required this.shutdownTextController,
     required this.youtube,
+    required this.updateService,
   });
   final StreamController controller;
   final TextEditingController titleController;
   final TextEditingController startupTextController;
   final TextEditingController shutdownTextController;
   final YouTubeLiveService youtube;
+  final AppUpdateService? updateService;
 
   Future<void> _chooseRecordingDirectory() async {
     final path = await getDirectoryPath(
@@ -258,6 +260,10 @@ class _SettingsPanel extends StatelessWidget {
             listenable: youtube,
             builder: (context, _) => _YouTubeDestination(youtube: youtube),
           ),
+          if (updateService != null) ...[
+            const Divider(height: 32),
+            _UpdateStatusCard(updateService: updateService!),
+          ],
           if (session.error != null) ...[
             const SizedBox(height: 18),
             Text(
@@ -270,4 +276,78 @@ class _SettingsPanel extends StatelessWidget {
       ),
     );
   }
+}
+
+class _UpdateStatusCard extends StatelessWidget {
+  const _UpdateStatusCard({required this.updateService});
+
+  final AppUpdateService updateService;
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: updateService,
+    builder: (context, _) {
+      final status = updateService.status;
+      final busy =
+          status == UpdateStatus.checking || status == UpdateStatus.downloading;
+      final icon = switch (status) {
+        UpdateStatus.ready => Icons.system_update_alt,
+        UpdateStatus.error => Icons.cloud_off_outlined,
+        UpdateStatus.current => Icons.check_circle_outline,
+        _ => Icons.cloud_download_outlined,
+      };
+      final message =
+          updateService.message ??
+          switch (status) {
+            UpdateStatus.checking => 'Checking for updates…',
+            UpdateStatus.unsupported =>
+              'Automatic updates are available on Windows.',
+            _ => 'Church Streamer ${updateService.currentVersion}',
+          };
+      return Semantics(
+        key: const Key('update-status'),
+        liveRegion: true,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (busy)
+              const SizedBox.square(
+                dimension: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            else
+              Icon(icon, size: 22, color: kAccentTeal),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'App updates · ${updateService.currentVersion}',
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(message, style: const TextStyle(color: Colors.black54)),
+                  if (status == UpdateStatus.downloading &&
+                      updateService.downloadProgress != null) ...[
+                    const SizedBox(height: 8),
+                    LinearProgressIndicator(
+                      value: updateService.downloadProgress,
+                    ),
+                  ],
+                  if (status == UpdateStatus.error) ...[
+                    const SizedBox(height: 6),
+                    TextButton(
+                      onPressed: updateService.checkForUpdates,
+                      child: const Text('Try again'),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    },
+  );
 }

@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:file_selector/file_selector.dart';
+import 'package:package_info_plus/package_info_plus.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'controllers/audio_sources_controller.dart';
 import 'controllers/camera_sources_controller.dart';
@@ -16,6 +18,7 @@ import 'services/app_log.dart';
 import 'services/ffmpeg_stream_engine.dart';
 import 'services/stream_engine.dart';
 import 'services/stream_settings_store.dart';
+import 'services/update_service.dart';
 import 'services/youtube_live_service.dart';
 import 'services/youtube_provisioning_stream_engine.dart';
 import 'ui/app_theme.dart';
@@ -52,6 +55,7 @@ class StreamDashboard extends StatefulWidget {
     required this.audioSources,
     required this.recordingEngine,
     required this.youtube,
+    this.updateService,
     super.key,
   });
   final StreamController controller;
@@ -59,6 +63,7 @@ class StreamDashboard extends StatefulWidget {
   final AudioSourcesController audioSources;
   final FfmpegStreamEngine recordingEngine;
   final YouTubeLiveService youtube;
+  final AppUpdateService? updateService;
 
   @override
   State<StreamDashboard> createState() => _StreamDashboardState();
@@ -88,11 +93,13 @@ class _StreamDashboardState extends State<StreamDashboard> {
       text: widget.controller.session.shutdownText,
     );
     widget.controller.addListener(_syncTextFromSession);
+    widget.controller.addListener(_syncUpdateActivity);
     _cameraSources = widget.cameraSources;
     _audioSources = widget.audioSources;
-    WidgetsBinding.instance.addPostFrameCallback(
-      (_) => _initializeMediaAccess(),
-    );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _syncUpdateActivity();
+      _initializeMediaAccess();
+    });
   }
 
   @override
@@ -101,12 +108,21 @@ class _StreamDashboardState extends State<StreamDashboard> {
     _startupTextController.dispose();
     _shutdownTextController.dispose();
     widget.controller.removeListener(_syncTextFromSession);
+    widget.controller.removeListener(_syncUpdateActivity);
     _cameraSources.dispose();
     widget.recordingEngine.dispose();
     widget.youtube.dispose();
     _audioSources.dispose();
     widget.controller.dispose();
+    widget.updateService?.dispose();
     super.dispose();
+  }
+
+  void _syncUpdateActivity() {
+    final session = widget.controller.session;
+    widget.updateService?.setDownloadsAllowed(
+      !session.isLive && !session.isBusy,
+    );
   }
 
   void _syncTextFromSession() {
@@ -263,6 +279,8 @@ class _StreamDashboardState extends State<StreamDashboard> {
       logMessage('Media resource cleanup during quit failed: $error');
     }
 
+    await widget.updateService?.launchInstallerOnExit();
+
     await SystemNavigator.pop();
     exit(0);
   }
@@ -285,6 +303,7 @@ class _StreamDashboardState extends State<StreamDashboard> {
     audioSources: _audioSources,
     recordingEngine: widget.recordingEngine,
     youtube: widget.youtube,
+    updateService: widget.updateService,
     permissionMessage: _permissionMessage,
     requestingPermissions: _requestingPermissions,
     isQuitting: _isQuitting,

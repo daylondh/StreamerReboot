@@ -10,6 +10,7 @@ class _DashboardView extends StatelessWidget {
     required this.audioSources,
     required this.recordingEngine,
     required this.youtube,
+    required this.updateService,
     required this.permissionMessage,
     required this.requestingPermissions,
     required this.isQuitting,
@@ -26,6 +27,7 @@ class _DashboardView extends StatelessWidget {
   final AudioSourcesController audioSources;
   final FfmpegStreamEngine recordingEngine;
   final YouTubeLiveService youtube;
+  final AppUpdateService? updateService;
   final String? permissionMessage;
   final bool requestingPermissions;
   final bool isQuitting;
@@ -74,6 +76,7 @@ class _DashboardView extends StatelessWidget {
                                 startupTextController: startupTextController,
                                 shutdownTextController: shutdownTextController,
                                 youtube: youtube,
+                                updateService: updateService,
                               ),
                             ),
                             const SizedBox(width: 16),
