@@ -40,13 +40,20 @@ For a test package, open **Actions**, select **Build Windows release**, choose
 **Run workflow**, and download the `ChurchStreamer-Windows-x64` artifact when
 the run finishes. Workflow artifacts are kept for 14 days.
 
-For a durable release and automatic updates, make sure `pubspec.yaml` contains
-the intended version, then push a matching tag such as `v0.5.1`. The workflow
-creates a GitHub Release and attaches `ChurchStreamer-Windows-x64.zip`.
+For a durable release and automatic updates, open **Actions**, select
+**Prepare Church Streamer release**, choose **Run workflow** from `main`, and
+select a patch, minor, or major version bump. That workflow updates
+`pubspec.yaml`, increments the build number, commits the version, creates the
+matching tag, and starts **Build Windows release**. The Windows workflow creates
+a GitHub Release and attaches `ChurchStreamer-Windows-x64.zip`.
 Installed Windows copies check the latest stable release, verify GitHub's
 SHA-256 asset digest, download it while idle, and install it when the user
 chooses **Quit**. Draft and prerelease releases are not returned by GitHub's
 latest-release endpoint.
+
+The automated workflow requires GitHub Actions to be allowed to write to
+`main`. If branch protection blocks automation commits, bump and tag the
+version locally instead.
 
 The CI artifact intentionally excludes `client_secrets.json`. After extracting
 the downloaded ZIP on a trusted computer, place `client_secrets.json` beside

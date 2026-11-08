@@ -1,0 +1,116 @@
+name: Prepare Church Streamer release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version component to increment
+        type: choice
+        required: true
+        default: patch
+        options:
+          - patch
+          - minor
+          - major
+
+concurrency:
+  group: prepare-release
+  cancel-in-progress: false
+
+permissions:
+  actions: write
+  contents: write
+
+jobs:
+  prepare:
+    name: Bump version and start release build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Require the main branch
+        shell: pwsh
+        run: |
+          if ('${{ github.ref }}' -ne 'refs/heads/main') {
+            throw "Run this workflow from the main branch."
+          }
+
+      - name: Check out main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Calculate and write the next version
+        id: version
+        shell: pwsh
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: |
+          $path = Join-Path $env:GITHUB_WORKSPACE "pubspec.yaml"
+          $content = [IO.File]::ReadAllText($path)
+          $match = [regex]::Match($content, '(?m)^version:\s*(\d+)\.(\d+)\.(\d+)\+(\d+)\s*$')
+          if (-not $match.Success) {
+            throw "pubspec.yaml must contain a version in the form major.minor.patch+build."
+          }
+
+          $major = [int]$match.Groups[1].Value
+          $minor = [int]$match.Groups[2].Value
+          $patch = [int]$match.Groups[3].Value
+          $build = [int]$match.Groups[4].Value + 1
+          switch ($env:BUMP) {
+            'major' { $major += 1; $minor = 0; $patch = 0 }
+            'minor' { $minor += 1; $patch = 0 }
+            'patch' { $patch += 1 }
+            default { throw "Unknown version bump: $($env:BUMP)" }
+          }
+
+          $version = "$major.$minor.$patch"
+          $tag = "v$version"
+          $existingTag = git ls-remote --tags origin "refs/tags/$tag"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not check existing release tags."
+          }
+          if ($existingTag) {
+            throw "The release tag $tag already exists."
+          }
+
+          $replacement = "version: $version+$build"
+          $updated = $content.Remove($match.Index, $match.Length).Insert($match.Index, $replacement)
+          [IO.File]::WriteAllText($path, $updated, [Text.UTF8Encoding]::new($false))
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+
+      - name: Commit and tag the release
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pubspec.yaml
+          git commit -m "Release $env:VERSION"
+          git tag -a $env:TAG -m "Church Streamer $env:VERSION"
+          git push --atomic origin HEAD:main $env:TAG
+
+      # Pushes made with GITHUB_TOKEN do not start ordinary push workflows.
+      # Dispatch the Windows workflow explicitly at the new tag instead.
+      - name: Start the Windows release build
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: gh workflow run windows-release.yml --ref $env:TAG -f run_checks=true
+
+      - name: Summary
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          @"
+          ## Church Streamer $env:VERSION
+
+          The version commit and tag were pushed. The Windows build and GitHub
+          Release are now running in the **Build Windows release** workflow.
+          "@ >> $env:GITHUB_STEP_SUMMARY
