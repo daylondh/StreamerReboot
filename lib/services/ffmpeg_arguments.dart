@@ -16,6 +16,14 @@ List<String> _buildFfmpegArguments({
   '-hide_banner',
   '-loglevel',
   'warning',
+  // Emit machine-readable progress without enabling FFmpeg's continuously
+  // rewritten console status. These lines are folded into periodic health
+  // diagnostics by the stream engine and do not alter media timing.
+  '-nostats',
+  '-stats_period',
+  '5',
+  '-progress',
+  'pipe:2',
   '-f',
   'rawvideo',
   '-pixel_format',
@@ -108,6 +116,13 @@ List<String> _buildFfmpegArguments({
   '2',
   '-f',
   'tee',
+  // Keep a temporarily slow network or recording destination from blocking
+  // the encoder and the other destination. The queue contains encoded packets,
+  // so this provides useful jitter headroom without retaining raw video frames.
+  '-use_fifo',
+  '1',
+  '-fifo_options',
+  'queue_size=600',
   '[f=flv:flvflags=no_duration_filesize:onfail=abort]$ingestionUrl'
       '${outputPath == null ? '' : '|[f=mp4:movflags=+faststart:onfail=ignore]$outputPath'}',
 ];

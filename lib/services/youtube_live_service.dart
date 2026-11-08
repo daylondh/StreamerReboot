@@ -284,15 +284,27 @@ class YouTubeLiveService extends ChangeNotifier {
       );
       _broadcastId = broadcast.id;
       _setStatus(YouTubeConnectionStatus.creatingStream);
+      final autoDetectFormat =
+          session.outputResolution == StreamOutputResolution.original;
       final stream = await api.liveStreams.insert(
         LiveStream(
           snippet: LiveStreamSnippet(title: session.title),
           cdn: CdnSettings(
             ingestionType: 'rtmp',
-            resolution: '720p',
+            // "Original" depends on the selected camera and can change after
+            // a device switch, so let YouTube inspect it. Explicitly scaled
+            // outputs can be declared exactly.
+            resolution: switch (session.outputResolution) {
+              StreamOutputResolution.p1080 => '1080p',
+              StreamOutputResolution.p720 => '720p',
+              StreamOutputResolution.p480 => '480p',
+              StreamOutputResolution.original => 'variable',
+            },
             // YouTube groups 24/30 fps as its standard frame-rate tier and
             // requires the high-frame-rate tier for a 60 fps ingest.
-            frameRate: session.frameRate == StreamFrameRate.fps60
+            frameRate: autoDetectFormat
+                ? 'variable'
+                : session.frameRate == StreamFrameRate.fps60
                 ? '60fps'
                 : '30fps',
           ),

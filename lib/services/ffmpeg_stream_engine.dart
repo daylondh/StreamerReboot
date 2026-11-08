@@ -72,6 +72,12 @@ class FfmpegStreamEngine extends ChangeNotifier
   Timer? _audioTimer;
   Stopwatch? _audioClock;
   int _audioChunksWritten = 0;
+  Timer? _streamHealthTimer;
+  Stopwatch? _streamHealthClock;
+  Duration _lastStreamHealthAt = Duration.zero;
+  int _lastHealthVideoFrames = 0;
+  int _lastHealthAudioChunks = 0;
+  final Map<String, String> _ffmpegProgress = {};
   Timer? _slateTimer;
   int _slateGeneration = 0;
   final DelayedVideoQueue _videoQueue = DelayedVideoQueue();
@@ -205,6 +211,7 @@ class FfmpegStreamEngine extends ChangeNotifier
           .transform(const LineSplitter())
           .listen((line) {
             final diagnostic = _sanitizeDiagnostic(line);
+            if (_captureFfmpegProgress(diagnostic)) return;
             _stderr.add(diagnostic);
             if (_stderr.length > 30) _stderr.removeAt(0);
             logMessage('[FFmpeg] $diagnostic');
@@ -214,6 +221,7 @@ class FfmpegStreamEngine extends ChangeNotifier
       await _audioServer?.close();
       _audioServer = null;
       _startAudioMixer();
+      _startStreamHealthDiagnostics();
       final startupSlate = _startupSlate;
       if (startupSlate != null) {
         _startupSlateRelease = Completer<void>();

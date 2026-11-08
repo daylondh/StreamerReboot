@@ -345,6 +345,17 @@ void main() {
     expect(arguments, containsAllInOrder(['-c:a', 'aac']));
     expect(arguments, containsAllInOrder(['-f', 'tee']));
     expect(
+      arguments,
+      containsAllInOrder([
+        '-f',
+        'tee',
+        '-use_fifo',
+        '1',
+        '-fifo_options',
+        'queue_size=600',
+      ]),
+    );
+    expect(
       arguments.last,
       '[f=flv:flvflags=no_duration_filesize:onfail=abort]'
       'rtmps://youtube.example/live/secret-key|'
@@ -462,5 +473,9 @@ void main() {
       ]),
     );
     expect(arguments, isNot(contains('-af')));
+    expect(
+      arguments,
+      containsAllInOrder(['-stats_period', '5', '-progress', 'pipe:2']),
+    );
   });
 }

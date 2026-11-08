@@ -1,6 +1,84 @@
 part of 'ffmpeg_stream_engine.dart';
 
 extension _FfmpegDiagnostics on FfmpegStreamEngine {
+  static const _progressFields = {
+    'bitrate',
+    'drop_frames',
+    'dup_frames',
+    'fps',
+    'frame',
+    'out_time',
+    'out_time_ms',
+    'out_time_us',
+    'progress',
+    'speed',
+    'stream_0_0_q',
+    'total_size',
+  };
+
+  bool _captureFfmpegProgress(String line) {
+    final separator = line.indexOf('=');
+    if (separator <= 0) return false;
+    final key = line.substring(0, separator);
+    if (!_progressFields.contains(key)) return false;
+    _ffmpegProgress[key] = line.substring(separator + 1);
+    if (key == 'progress') {
+      logMessage(
+        '[FFmpeg progress] frame=${_ffmpegProgress['frame'] ?? '?'} '
+        'fps=${_ffmpegProgress['fps'] ?? '?'} '
+        'time=${_ffmpegProgress['out_time'] ?? '?'} '
+        'speed=${_ffmpegProgress['speed'] ?? '?'} '
+        'dup=${_ffmpegProgress['dup_frames'] ?? '0'} '
+        'drop=${_ffmpegProgress['drop_frames'] ?? '0'}',
+      );
+    }
+    return true;
+  }
+
+  void _startStreamHealthDiagnostics() {
+    _streamHealthTimer?.cancel();
+    _streamHealthClock = Stopwatch()..start();
+    _lastStreamHealthAt = Duration.zero;
+    _lastHealthVideoFrames = _videoQueue.framesWritten;
+    _lastHealthAudioChunks = _audioChunksWritten;
+    _streamHealthTimer = Timer.periodic(
+      const Duration(seconds: 5),
+      (_) => _logStreamHealth(),
+    );
+  }
+
+  void _logStreamHealth() {
+    final elapsed = _streamHealthClock?.elapsed ?? Duration.zero;
+    final interval = elapsed - _lastStreamHealthAt;
+    final eventLoopLag = math.max(interval.inMilliseconds - 5000, 0);
+    final videoFrames = _videoQueue.framesWritten;
+    final audioChunks = _audioChunksWritten;
+    final videoDelta = videoFrames >= _lastHealthVideoFrames
+        ? videoFrames - _lastHealthVideoFrames
+        : videoFrames;
+    final audioDelta = audioChunks >= _lastHealthAudioChunks
+        ? audioChunks - _lastHealthAudioChunks
+        : audioChunks;
+    final rssMiB = ProcessInfo.currentRss / (1024 * 1024);
+    logMessage(
+      '[Stream health] interval=${interval.inMilliseconds}ms '
+      'eventLoopLag=${eventLoopLag}ms rss=${rssMiB.toStringAsFixed(1)}MiB '
+      'videoFrames=$videoDelta audioChunks=$audioDelta '
+      'videoDelayQueue=${_videoQueue.bufferedFrameCount}',
+    );
+    _lastStreamHealthAt = elapsed;
+    _lastHealthVideoFrames = videoFrames;
+    _lastHealthAudioChunks = audioChunks;
+  }
+
+  void _stopStreamHealthDiagnostics() {
+    _streamHealthTimer?.cancel();
+    _streamHealthTimer = null;
+    _streamHealthClock?.stop();
+    _streamHealthClock = null;
+    _ffmpegProgress.clear();
+  }
+
   Future<String> _createOutputPath(StreamSession session) async {
     final directory = session.recordingDirectory.isEmpty
         ? await _defaultDirectory()

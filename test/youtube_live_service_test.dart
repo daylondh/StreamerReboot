@@ -188,6 +188,7 @@ void main() {
         privacy: ServicePrivacy.unlisted,
         youtubeDescription: 'Join us for Sunday worship.',
         frameRate: StreamFrameRate.fps60,
+        outputResolution: StreamOutputResolution.p1080,
       ),
     );
 
@@ -217,6 +218,7 @@ void main() {
     );
     final streamBody = jsonDecode(streamRequest.body);
     expect(streamBody['cdn']['frameRate'], '60fps');
+    expect(streamBody['cdn']['resolution'], '1080p');
     expect(
       broadcastBody['contentDetails']['monitorStream']['enableMonitorStream'],
       isFalse,

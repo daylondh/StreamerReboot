@@ -49,6 +49,7 @@ extension _FfmpegTransport on FfmpegStreamEngine {
   }
 
   Future<void> _closeInputFeeds() async {
+    _stopStreamHealthDiagnostics();
     _slateGeneration++;
     _slateTimer?.cancel();
     _slateTimer = null;
